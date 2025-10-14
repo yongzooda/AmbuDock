@@ -1,0 +1,79 @@
+# ===========================
+# 🌱 Common (Global)
+# ===========================
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.old
+
+# IntelliJ / IDEA / VSCode
+.idea/
+.vscode/
+*.iml
+
+# OS-specific
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# ===========================
+# 🧩 Backend (Spring Boot)
+# ===========================
+backend/target/
+backend/.mvn/wrapper/maven-wrapper.jar
+backend/.mvn/timing.properties
+backend/.mvn/wrapper/maven-wrapper.properties.bak
+backend/logs/
+backend/out/
+
+# Spring Boot build files
+*.war
+*.jar
+
+# Local environment
+backend/.env
+backend/application-local.yml
+backend/application-dev.yml
+backend/application-prod.yml
+
+# ===========================
+# ⚛️ Frontend (Vite + React)
+# ===========================
+frontend/node_modules/
+frontend/.env
+frontend/.env.local
+frontend/.env.development
+frontend/.env.production
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/package-lock.json.bak
+
+# ===========================
+# 🚀 Deployment & Temp
+# ===========================
+*.pid
+*.seed
+*.pid.lock
+
+# AWS / Cloud
+*.pem
+*.key
+*.crt
+
+# ===========================
+# 🧠 Misc (optional)
+# ===========================
+# JetBrains project indexing cache
+.idea_modules/
+.idea_modules.xml
+
+# MacOS metadata
+__MACOSX/
