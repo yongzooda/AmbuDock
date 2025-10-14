@@ -38,9 +38,11 @@ public class Hospital {
     @JoinColumn(name="region_id")
     private Region region;
 
+    /** 응급실 전화번호 (dutyTel3) */
     @Column(length=50)
     private String telEmergency;
 
+    /** 대표 전화번호 (있을 경우) */
     @Column(length=50)
     private String telMain;
 

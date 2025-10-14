@@ -13,6 +13,7 @@ public class JacksonConfig {
         return JsonMapper.builder()
                 .findAndAddModules()
                 .build()
+                // JSON 직렬화 시 null 필드를 제외하여 응답을 깔끔하게 만듦
                 .setSerializationInclusion(JsonInclude.Include.NON_NULL);
     }
 }
