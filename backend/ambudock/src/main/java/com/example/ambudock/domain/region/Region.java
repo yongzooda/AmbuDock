@@ -17,6 +17,7 @@ public class Region {
     @GeneratedValue(strategy= GenerationType.IDENTITY)
     private Long regionId;
 
+    //행정구역 코드 (법정동 코드 등)
     @Column(nullable=false,unique=true,length=20)
     private String code;
 
