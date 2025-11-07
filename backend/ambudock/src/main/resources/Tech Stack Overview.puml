@@ -1,0 +1,76 @@
+@startuml
+' AmbuDock — Tech Stack Overview (clean & bilingual)
+title AmbuDock — 개발 환경 및 기술 스택 (Tech Stack Overview)
+left to right direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam linetype ortho
+skinparam wrapWidth 220
+hide stereotype
+
+' ---------- Internet ----------
+cloud "Internet" as NET {
+  [User Browser]
+}
+
+' ---------- Frontend ----------
+package "Frontend (웹앱)" as FE {
+  [React SPA\n- React + TypeScript (Vite)\n- Tailwind CSS, lucide-react\n- Leaflet (지도)\n- fetch/axios\n- ESLint + Prettier] as SPA
+}
+
+' ---------- Backend ----------
+package "Backend (Spring Boot)" as BE {
+  [Spring Boot App :8080\n- Java 21, MVC/Validation\n- JPA(Hibernate), HikariCP\n- WebClient(타임아웃/재시도, 서킷브레이커)\n- Caffeine Cache → Redis(옵션)\n- @Scheduled: NMC/HLI 60s, MOIS 180s\n- TMAP Proxy (/api/tmap/route)\n  · 캐시 2m / 타임아웃 1.5s\n- AppConfig 중앙관리] as SPRING
+}
+
+' ---------- Database ----------
+database "MySQL 8 (AWS RDS)\n- Flyway 마이그레이션" as DB
+
+' ---------- Infra & Deployment ----------
+package "Infra & Deployment (AWS)" as INFRA {
+  [ALB (HTTPS / TLS-ACM)] as ALB
+  node "EC2 (Private Subnet)" as EC2 {
+    [Nginx\n- 정적 SPA 서빙\n- /api → :8080 프록시] as NGINX
+  }
+  [S3\n정적 자산/로그] as S3
+  [SSM / Secrets Manager\n비밀/설정 관리] as SEC
+  [NAT/IGW\n아웃바운드 호출] as NAT
+}
+
+' ---------- DevOps / Observability ----------
+package "DevOps / Observability" as OPS {
+  [GitHub Actions (CI/CD)\n- FE: vite build → EC2 배포\n- BE: mvn package → JAR 배포(systemd)\n- 헬스체크 후 교체] as GHA
+  [CloudWatch\n- 메트릭/알람\n- 로그 수집] as CW
+  [Logging\n- JSON + trace_id\n- Nginx access/error] as LOGS
+}
+
+' ---------- External APIs ----------
+cloud "External APIs" as EXT {
+  [NMC ER/ICU]
+  [MOIS Alerts]
+  [Kakao Local/ReverseGeo]
+  [TMAP Routing REST]
+}
+
+' ---------- Flows (minimal) ----------
+NET --> ALB
+ALB --> NGINX
+NGINX --> SPRING
+
+SPRING --> DB
+SPRING --> S3
+SPRING --> EXT
+
+GHA --> NGINX : FE 배포
+GHA --> SPRING : BE 배포
+
+' ---------- Notes / Legend ----------
+legend right
+**핵심 운영 파라미터**
+- 수집주기: NMC/HLI 60s, MOIS 180s
+- TMAP Proxy: 캐시 2m, 타임아웃 1.5s
+- DB: MySQL 8 (RDS), 마이그레이션 Flyway
+- 보안: SSM/Secrets, ALB HTTPS(TLS-ACM)
+endlegend
+
+@enduml

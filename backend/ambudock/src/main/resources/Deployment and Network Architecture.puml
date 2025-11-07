@@ -1,0 +1,114 @@
+@startuml
+' AmbuDock — Deployment / Network Architecture (clean & bilingual)
+left to right direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam linetype ortho
+skinparam wrapWidth 220
+hide stereotype
+title AmbuDock — Deployment / Network Architecture (AWS)\n배포/네트워크 아키텍처
+
+' -------- ROW #1 : Internet & External --------
+together {
+  cloud "Internet (인터넷)" as NET {
+    [User Browser\nReact SPA] as BROWSER
+  }
+
+  cloud "External APIs (외부 API)" as EXT {
+    [NMC ER/ICU API] as NMC
+    [MOIS Alerts]   as MOIS
+    [Kakao Local / ReverseGeo] as KAKAO
+    [TMAP Routing REST] as TMAP
+  }
+}
+
+' -------- ROW #2 : AWS VPC --------
+together {
+  node "AWS VPC" as VPC {
+    node "Public Subnet" as PUB {
+      [ALB\nHTTPS 443, ACM TLS] as ALB
+    }
+    node "Private Subnet" as PRI {
+      node "EC2 (App)" as EC2 {
+        [Nginx (Reverse Proxy)\n:80 -> :8080] as NGINX
+        [Spring Boot :8080\nMaven, WebClient, JPA] as SPRING
+        [Static Assets\nSPA build] as STATIC
+      }
+      database "RDS MySQL\n(운영 DB)" as RDS
+      [S3 Bucket\nassets / logs] as S3
+    }
+  }
+}
+
+' -------- ROW #3 : CI/CD --------
+rectangle "GitHub Actions\n(CI/CD)" as GHA
+
+' ================= FLOWS (short numeric labels) =================
+' ingress (요청 유입)
+BROWSER --> ALB    : F1
+ALB     --> NGINX  : F2
+NGINX   --> SPRING : F3
+
+' data plane (데이터 경로)
+SPRING  --> RDS : F4
+SPRING  --> S3  : F5
+
+' egress (NAT/IGW abstracted)
+SPRING  --> NMC  : F6
+SPRING  --> MOIS : F7
+SPRING  --> KAKAO: F8
+SPRING  --> TMAP : F9
+
+' CI/CD
+GHA --> SPRING : F10
+GHA --> STATIC : F11
+STATIC --> NGINX : F12
+
+' -------------------- LEGEND --------------------
+legend right
+**Flow Legend (흐름 설명)**
+
+F1  Browser -> ALB : HTTPS 443 (TLS/ACM) / 브라우저에서 ALB로
+F2  ALB -> Nginx   : HTTP 80 (Target Group) / ALB에서 Nginx로
+F3  Nginx -> Spring : reverse proxy (/api -> :8080), SPA static serve
+
+F4  Spring <-> RDS  : JDBC (HikariCP), JPA (Hibernate) / DB 연동
+F5  Spring -> S3    : SDK 업로드 (자산/로그)
+
+F6  Spring -> NMC   : WebClient poll 60s / 상태 수집
+F7  Spring -> MOIS  : WebClient poll 180s / 재난 수집
+F8  Spring -> Kakao : 지오코딩/정합 (온보딩)
+F9  Spring -> TMAP  : Proxy /api/tmap/route (경로/ETA 위임)
+
+F10 GitHub Actions -> Spring : JAR 배포 (ssh/scp, systemd restart)
+F11 GitHub Actions -> Static : SPA 빌드 업로드
+F12 Static -> Nginx : /var/www 배치 (헬스체크 후 교체)
+endlegend
+
+' -------------------- NOTES --------------------
+note right of NGINX
+Nginx
+- Serve SPA static files
+- Proxy /api/* -> :8080
+- gzip, HTTP/2, cache headers
+(Nginx: 정적 서빙, API 프록시)
+end note
+
+note right of SPRING
+Spring Boot
+- @Scheduled: NMC 60s, MOIS 180s
+- TMAP Proxy: cache 2m, timeout 1.5s
+- AppConfig: 운영 파라미터 주입
+(Spring 잡/프록시/설정)
+end note
+
+note right of RDS
+RDS MySQL
+- Multi-AZ 권장, Performance Insights
+- Basic indexes:
+  hospital(lat,lon)
+  hli_snapshot(hpid)
+  disaster_alert(is_active,severity)
+(DB 가용성/인덱스)
+end note
+@enduml

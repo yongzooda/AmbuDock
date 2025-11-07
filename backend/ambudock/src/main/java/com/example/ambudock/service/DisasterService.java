@@ -48,6 +48,14 @@ public class DisasterService {
         }
         return new DisasterDtos.EvaluateResponse(results);
     }
-    private int rank(MatchLevel m){ return switch(m){ case SIGUNGU->1; case DONG->2; case SIDO->3; default->9; }; }
+
+    private int rank(MatchLevel m){
+        return switch(m){
+            case DONG   -> 1;
+            case SIGUNGU-> 2;
+            case SIDO   -> 3;
+            default     -> 9;
+        };
+    }
 }
 

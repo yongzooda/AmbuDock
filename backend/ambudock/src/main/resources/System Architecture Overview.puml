@@ -1,0 +1,162 @@
+@startuml
+' AmbuDock — System Architecture Overview (Bilingual / no overlap)
+left to right direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment left
+skinparam wrapWidth 220
+skinparam linetype ortho
+hide stereotype
+
+title AmbuDock — System Architecture Overview\n(시스템 아키텍처 개요)
+
+' ---------- ROW #1 : Client & External ----------
+together {
+  package "Client (클라이언트)" {
+    [WebApp (React)] as WEB
+  }
+
+  cloud "External Data Sources (외부 데이터 소스)" as EXT {
+    [NMC ER/ICU API\n(60s)] as NMC
+    [MOIS Alerts\n(180s)] as MOIS
+    [Kakao Local / Reverse Geo] as KAKAO
+    [TMAP Routing REST] as TMAP
+  }
+}
+
+' ---------- ROW #2 : Backend Core ----------
+together {
+  package "Backend (AmbuDock)" as BE {
+    [API Gateway\n/Public API] as API
+
+    package "Ingestion & Harmonization\n(수집·정합 파이프라인)" {
+      [A1 Master Onboarding\n(Kakao)] as A1
+      [A2 Status Loader\n(60s)] as A2
+      [A3 HLI Calculator\n(60s)] as A3
+      [A4 Disaster Ingest\n(180s)] as A4
+      [A5 Alert↔Region Mapper] as A5
+    }
+
+    package "Routing Proxy\n(경로 프록시)" {
+      [TMAP Proxy\nPOST /api/tmap/route] as PROXY
+    }
+
+    package "Admin (운영)" {
+      [AppConfig Service] as CFG
+      [Admin API] as ADM
+    }
+
+    database "Operational DB\n(운영 DB)" as DB
+    collections "Cache (Redis)\n(선택)" as CACHE
+    [Audit / Score Log\n(감사/점수 로그)] as AUDIT
+  }
+}
+
+' ================== FLOWS (short numeric labels) ==================
+' Ingestion / compute
+NMC  --> A2 : F1
+A2   --> DB : F2
+A3   --> DB : F3
+A3   --> AUDIT : F4
+DB   --> A3 : F5
+MOIS --> A4 : F6
+A4   --> DB : F7
+A4   --> A5 : F8
+A5   --> DB : F9
+KAKAO--> A1 : F10
+A1   --> DB : F11
+
+' Public API
+WEB --> API : F12
+API --> DB  : F13
+API --> WEB : F14
+
+WEB --> API : F15
+API --> DB  : F16
+API --> WEB : F17
+
+WEB --> API : F18
+API --> DB  : F19
+API --> WEB : F20
+
+WEB --> PROXY : F21
+PROXY --> TMAP : F22
+PROXY --> WEB  : F23
+
+' Admin / config / cache
+ADM --> CFG : F24
+CFG --> API : F25
+CFG --> A2  : F26
+CFG --> A4  : F27
+CFG --> PROXY : F28
+API --> CACHE : F29
+
+' -------------------- LEGEND --------------------
+legend right
+**Flow Legend (흐름 설명)**
+
+F1  NMC → A2 : Real-time status pull (60s) / 실시간 상태 수집
+F2  A2 → DB : upsert HospitalStatus
+F3  A3 → DB : upsert HliSnapshot (latest 1:1) / 최신 스냅샷 저장
+F4  A3 → AUDIT : score/penalty/reason log / 점수·감점·사유 로그
+F5  DB → A3 : read status (HLI input) / HLI 입력 데이터
+
+F6  MOIS → A4 : alert fetch (180s) / 재난문자 수집
+F7  A4 → DB : upsert DisasterAlert (TTL,is_active)
+F8  A4 → A5 : region tokens / 지역 토큰 전달
+F9  A5 → DB : upsert AlertRegionMap
+
+F10 Kakao → A1 : geocode/reverse / 지오코딩·역지오코딩
+F11 A1 → DB : upsert Hospital (addr/region) / 병원 마스터 정합
+
+F12 WEB → API : GET /api/hospitals (주변 병원)
+F13 API → DB : read hospitals + HLI
+F14 API → WEB : list + HLI summary / 목록 + 요약
+
+F15 WEB → API : POST /api/disasters/evaluate (hpids[])
+F16 API → DB : read alerts/regions
+F17 API → WEB : blocked · severity · badges
+
+F18 WEB → API : GET /api/hospitals/{hpid} (detail)
+F19 API → DB : read ER/ICU detail (hv2..hv6,hvoc, icu_avail)
+F20 API → WEB : hospital detail payload
+
+F21 WEB → PROXY : POST /api/tmap/route
+F22 PROXY → TMAP : delegate route/ETA / 경로·ETA 위임
+F23 PROXY → WEB  : ETA / route_km / line_km
+
+F24 AdminAPI → AppConfig : mutate params / 파라미터 변경
+F25..F28 CFG → components : thresholds/intervals/timeout / 임계·주기·타임아웃 주입
+F29 API → CACHE : use cache (optional) / 캐시 사용(선택)
+endlegend
+
+' -------------------- NOTES --------------------
+note right of A3
+HLI Calculator (60s)
+- score = ER(hvec) + ICU adjust
+- level = GREEN / YELLOW / RED / GRAY
+- lag_sec = now - hvidate
+- save latest 1:1 (per hpid)
+(HLI 계산: 60초 주기)
+- 점수 = 응급실 가용 + ICU 보정
+- 레벨 = G/Y/R/GRAY, 신선도 lag_sec
+- 병원별 최신 1:1 보관
+end note
+
+note right of PROXY
+TMAP Proxy (경로 프록시)
+- input: origin + K≤10 dest × {car,walk}
+- output: ETA, route_km, line_km
+- cache 2m, timeout 1.5s
+end note
+
+note right of DB
+Core Tables (핵심 테이블)
+- Hospital(hpid, name_norm, lat, lon, addr_road, region_code)
+- HospitalStatus(hpid, hvidate, hvec, hv2..hv6, hvoc)
+- HliSnapshot(status_id FK, score, level, lag_sec, reason[])
+- DisasterAlert(id, issued_at, msg, severity, ttl, is_active)
+- AlertRegionMap(alert_id, region_code)
+- AppConfig(thresholds, intervals, penalties, K, radius_default)
+end note
+@enduml

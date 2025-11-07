@@ -7,7 +7,8 @@ import lombok.Setter;
 import org.hibernate.annotations.Type;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 /**
  * RankingEvent (추천/순위 계산 로그)
@@ -33,9 +34,9 @@ public class RankingEvent {
     @Column(name = "event_id", nullable = false)
     private Long eventId;
 
-    /** 추천 계산이 수행된 시각 (기본값: CURRENT_TIMESTAMP(3)) */
-    @Column(name = "calc_at", nullable = false)
-    private LocalDateTime calcAt;
+    /** 추천 계산이 수행된 시각 (UTC Instant, DB: DATETIME(3)) */
+    @Column(name = "calc_at", nullable = false, columnDefinition = "DATETIME(3)")
+    private Instant calcAt;
 
     /** 요청 시 사용자의 위도 */
     @Column(name = "origin_lat", precision = 10, scale = 7, nullable = false)
@@ -61,4 +62,11 @@ public class RankingEvent {
     /** 추천 연산 소요 시간(ms 단위) */
     @Column(name = "duration_ms", nullable = false)
     private Integer durationMs = 0;
+
+    @PrePersist
+    public void prePersist() {
+        if (this.calcAt == null) {
+            this.calcAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        }
+    }
 }

@@ -1,11 +1,9 @@
 -- =====================================================================
--- V1__schema.sql
+-- V1__schema_utc.sql
 -- AmbuDock Database Schema (MySQL 8.0)
--- 작성일: 2025-10-13
--- 설명: 초기 스키마 (Region, Hospital, HLI, Disaster, Config, Ranking)
 -- =====================================================================
 
--- 세션 설정
+-- 세션 설정 (마이그레이션이 실행되는 세션에서 UTC로 고정)
 SET NAMES utf8mb4;
 SET time_zone = '+00:00';
 
@@ -19,8 +17,8 @@ CREATE TABLE IF NOT EXISTS region (
   name_sido    VARCHAR(100) NOT NULL,
   name_sigungu VARCHAR(100) NULL,
   name_dong    VARCHAR(100) NULL,
-  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   CONSTRAINT PK_region_id PRIMARY KEY (region_id),
   CONSTRAINT UK_region_code UNIQUE (code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -38,8 +36,8 @@ CREATE TABLE IF NOT EXISTS hospital (
   region_id     BIGINT       NULL,
   tel_emergency VARCHAR(50)  NULL,
   tel_main      VARCHAR(50)  NULL,
-  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   CONSTRAINT PK_hospital PRIMARY KEY (hpid),
   KEY FK_hospital_region_id (region_id),
   CONSTRAINT FK_hospital_region
@@ -53,15 +51,15 @@ CREATE TABLE IF NOT EXISTS hospital (
 CREATE TABLE IF NOT EXISTS hospital_status (
   status_id   BIGINT       NOT NULL AUTO_INCREMENT,
   hpid        VARCHAR(20)  NOT NULL,
-  hvidate     DATETIME(3)  NOT NULL,            -- NMC 갱신시각(원천)
-  ingested_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3), -- 수집시각(서버)
+  hvidate     DATETIME(3)  NOT NULL,            -- NMC 갱신시각(원천, 반드시 UTC로 변환해 저장)
+  ingested_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3), -- 수집시각(서버, UTC)
   hvec        INT          NOT NULL DEFAULT 0,  -- ER 가용 병상
   hv2         INT          NULL DEFAULT 0,
   hv3         INT          NULL DEFAULT 0,
   hv4         INT          NULL DEFAULT 0,
   hv5         INT          NULL DEFAULT 0,
-  hv6         INT          NULL DEFAULT 0,
-  hvoc        INT          NULL DEFAULT 0,      -- 수술실 가용
+  hv6         INT          DEFAULT 0,
+  hvoc        INT          DEFAULT 0,           -- 수술실 가용
   CONSTRAINT PK_hospital_status PRIMARY KEY (status_id),
   KEY FK_hospital_status_hpid (hpid),
   KEY IDX_hospital_status_hpid_hvidate (hpid, hvidate),
@@ -77,7 +75,7 @@ CREATE TABLE IF NOT EXISTS hli_snapshot (
   hli_id        BIGINT        NOT NULL AUTO_INCREMENT,
   status_id     BIGINT        NOT NULL,
   hpid          VARCHAR(20)   NOT NULL,               -- 조인 최적화용 중복 컬럼
-  calc_at       DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  calc_at       DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3), -- 계산 시각(서버 UTC)
   er_base_score TINYINT       NOT NULL DEFAULT 0,
   icu_avail     INT           NOT NULL DEFAULT 0,     -- hv2+hv3+hv4+hv5+hv6+hvoc
   icu_bucket    ENUM('NONE','CRITICAL_LOW','LOW','MID','HIGH') NOT NULL DEFAULT 'NONE',
@@ -104,12 +102,12 @@ CREATE TABLE IF NOT EXISTS hli_snapshot (
 CREATE TABLE IF NOT EXISTS disaster_alert (
   alert_id      BIGINT        NOT NULL AUTO_INCREMENT,
   md101_sn      VARCHAR(40)   NOT NULL,  -- API 고유 식별자
-  issued_at     DATETIME(3)   NOT NULL,
+  issued_at     DATETIME(3)   NOT NULL,  -- 원문 발행시각(원천), 반드시 UTC로 변환해 저장
   location_id   VARCHAR(40)   NOT NULL,
   location_name VARCHAR(120)  NOT NULL,
   msg           TEXT          NOT NULL,
   severity      ENUM('IGNORE','WARN','BLOCK') NOT NULL DEFAULT 'IGNORE',
-  expires_at    DATETIME(3)   NULL,
+  expires_at    DATETIME(3)   NULL,      -- 만료(UTC)
   is_active     TINYINT(1)    NOT NULL DEFAULT 1,
   CONSTRAINT PK_disaster_alert PRIMARY KEY (alert_id),
   CONSTRAINT UK_disaster_alert_md101_sn UNIQUE (md101_sn)
@@ -120,7 +118,7 @@ CREATE TABLE IF NOT EXISTS disaster_alert (
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS alert_keyword (
   rule_id    BIGINT        NOT NULL AUTO_INCREMENT,
-  severity   ENUM('IGNORE','BLOCK','WARN') NOT NULL,
+  severity   ENUM('IGNORE','WARN','BLOCK') NOT NULL,
   pattern    VARCHAR(300)  NOT NULL,   -- 정규식 패턴
   enabled    TINYINT(1)    NOT NULL DEFAULT 1,
   priority   INT           NOT NULL DEFAULT 100,
@@ -138,7 +136,7 @@ CREATE TABLE IF NOT EXISTS alert_region_link (
   region_id       BIGINT      NOT NULL,
   match_level     ENUM('SIDO','SIGUNGU','DONG') NULL,
   created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at      DATETIME(3) NULL,
+  updated_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   CONSTRAINT PK_alert_region_link PRIMARY KEY (alert_region_id),
   KEY FK_alert_region_link_alert_id (alert_id),
   KEY FK_alert_region_link_region_id (region_id),
@@ -167,7 +165,7 @@ CREATE TABLE IF NOT EXISTS app_config (
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS ranking_event (
   event_id        BIGINT        NOT NULL AUTO_INCREMENT,
-  calc_at         DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  calc_at         DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3), -- 계산 시각(UTC)
   origin_lat      DECIMAL(10,7) NOT NULL,
   origin_lon      DECIMAL(10,7) NOT NULL,
   candidate_count INT           NOT NULL DEFAULT 0,

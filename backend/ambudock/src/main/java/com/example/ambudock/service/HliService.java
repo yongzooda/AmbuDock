@@ -11,8 +11,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
@@ -60,7 +60,11 @@ public class HliService {
         short base = erBaseScore(s.getHvec());
         short adj = adjust(buck);
 
-        int lagSec = (int) Duration.between(s.getHvidate(), LocalDateTime.now(ZoneOffset.UTC)).getSeconds();
+        Instant hviInstant = (s.getHvidate() == null) ? Instant.EPOCH : s.getHvidate();
+
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+
+        int lagSec = (int) Duration.between(hviInstant, now).getSeconds();
         StaleLevel stale = lagSec < soft ? StaleLevel.FRESH :
                 (lagSec < hard ? StaleLevel.SOFT : StaleLevel.HARD);
 
@@ -68,7 +72,7 @@ public class HliService {
         HliLevel level;
 
         if (stale == StaleLevel.HARD) {
-            score = 100;
+            score = 0;
             level = HliLevel.GRAY;
         } else {
             int tmp = base + adj;
@@ -96,7 +100,10 @@ public class HliService {
             reasonJson = "[]";
         }
 
-        return new Computed(base, icu, buck, adj, lagSec, stale, score, level, reasonJson);
+        // set computedAt to current UTC instant (ms precision)
+        Instant computedAt = now;
+
+        return new Computed(base, icu, buck, adj, lagSec, stale, score, level, reasonJson, computedAt);
     }
 
     private int nz(Integer n) {
@@ -115,5 +122,7 @@ public class HliService {
         private short score;
         private HliLevel level;
         private String reasonJson;
+
+        private Instant computedAt;
     }
 }
