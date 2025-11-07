@@ -24,13 +24,18 @@ spring:
 
 logging:
   level:
-    com.ambudock: debug
-
-caffeine:
-  specs:
-    hospitals: maximumSize=2000,expireAfterWrite=60s
-    disasters: maximumSize=2000,expireAfterWrite=300s
-    eta: maximumSize=10000,expireAfterWrite=120s
+    com.example.ambudock: debug
 
 app:
   default-radius-km: 15
+
+tmap:
+  proxy:
+    base-url: https://apis.openapi.sk.com
+    timeout-ms: 1500
+  app-key: ${TMAP_APP_KEY}
+
+ambudock:
+  admin:
+    username: admin
+    password: admin1234

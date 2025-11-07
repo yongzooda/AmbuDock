@@ -14,7 +14,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -51,13 +52,28 @@ public class HospitalQueryService {
 
             HospitalDtos.HliSummary summary=null;
             if(snap!=null){
+                // snap.getCalcAt() is Instant
                 summary=HospitalDtos.HliSummary.builder()
-                        .score(snap.getScore()).level(snap.getLevel().name()).color(colorOf(snap.getLevel()))
-                        .lagSec(snap.getLagSec()).staleLevel(snap.getStaleLevel().name()).updatedAt(snap.getCalcAt()).build();
+                        .score(snap.getScore())
+                        .level(snap.getLevel().name())
+                        .color(colorOf(snap.getLevel()))
+                        .lagSec(snap.getLagSec())
+                        .staleLevel(snap.getStaleLevel().name())
+                        .updatedAt(snap.getCalcAt()) // Instant
+                        .build();
             }else if(comp!=null){
+                // Prefer comp's computedAt if available; otherwise use now (UTC, truncated to ms)
+                Instant updatedAt = (comp.getComputedAt() != null) ? comp.getComputedAt()
+                        : Instant.now().truncatedTo(ChronoUnit.MILLIS);
+
                 summary=HospitalDtos.HliSummary.builder()
-                        .score(comp.getScore()).level(comp.getLevel().name()).color(colorOf(comp.getLevel()))
-                        .lagSec(comp.getLagSec()).staleLevel(comp.getStaleLevel().name()).updatedAt(LocalDateTime.now()).build();
+                        .score(comp.getScore())
+                        .level(comp.getLevel().name())
+                        .color(colorOf(comp.getLevel()))
+                        .lagSec(comp.getLagSec())
+                        .staleLevel(comp.getStaleLevel().name())
+                        .updatedAt(updatedAt) // Instant
+                        .build();
             }
 
             items.add(HospitalDtos.HospitalListItem.builder()

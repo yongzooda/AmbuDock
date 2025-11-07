@@ -1,0 +1,148 @@
+@startuml
+' AmbuDock — Application / Data Architecture (clean & bilingual)
+left to right direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment left
+skinparam wrapWidth 200
+skinparam linetype ortho
+hide stereotype
+title AmbuDock — Application / Data Architecture
+
+' ---------------- ROW #1 : Client & External ----------------
+together {
+  package "Client (WebApp / 클라이언트)" as CLIENT {
+    [React SPA] as CLIENT_APP
+  }
+
+  cloud "External Data Providers (외부 데이터 소스)" as EXT {
+    [NMC ER/ICU API] as NMC
+    [MOIS Alerts] as MOIS
+    [Kakao Local / ReverseGeo] as KAKAO
+    [TMAP Routing REST] as TMAP
+  }
+}
+
+' ---------------- ROW #2 : Backend API & DB ----------------
+together {
+  package "AmbuDock Backend (Spring Boot)" as BE {
+    [API Controllers\n(Spring MVC)] as API
+  }
+  database "RDS MySQL\n(운영 DB)" as DB
+}
+
+' ---------------- ROW #3 : Pipelines / Proxy / Audit ----------------
+together {
+  package "Schedulers / Pipelines\n(수집·정합 파이프라인)" as PIPE {
+    [A1 Master Onboarding] as A1
+    [A2 Status Loader (60s)] as A2
+    [A3 HLI Calculator (60s)] as A3
+    [A4 Disaster Ingest (180s)] as A4
+    [A5 Alert↔Region Map] as A5
+  }
+
+  [TMAP Proxy Service] as PROXY
+  [Audit / Score Log] as AUDIT
+}
+
+' ================= FLOWS (숫자 라벨; 상세는 Legend) =================
+' Ingestion / Compute
+KAKAO --> A1 : P1
+A1 --> DB : P2
+NMC --> A2 : P3
+A2 --> DB : P4
+A3 --> DB : P5
+A3 --> AUDIT : P6
+MOIS --> A4 : P7
+A4 --> DB : P8
+A4 --> A5 : P9
+A5 --> DB : P10
+
+' Public API
+CLIENT_APP --> API : C1
+API --> DB : C2
+API --> CLIENT_APP : C3
+
+CLIENT_APP --> API : C4
+API --> DB : C5
+API --> CLIENT_APP : C6
+
+CLIENT_APP --> API : C7
+API --> DB : C8
+API --> CLIENT_APP : C9
+
+' TMAP Proxy
+CLIENT_APP --> PROXY : T1
+PROXY --> TMAP : T2
+PROXY --> CLIENT_APP : T3
+
+' ---------------- NOTES (compact) ----------------
+note right of A3
+HLI Calculator (every 60s)
+- score = ER(hvec) + ICU adjust
+- level = GREEN/YELLOW/RED/GRAY
+- lag_sec = now - hvidate
+- latest 1:1 per hpid
+(HLI 계산: 60초 / 최신 1:1 저장)
+end note
+
+note right of A4
+Disaster Ingest (every 180s)
+- severity: BLOCK/WARN/IGNORE
+- TTL → is_active
+- A5 maps to admin regions
+(재난 수집: 180초 / TTL 만료)
+end note
+
+note right of PROXY
+TMAP Proxy
+- request: origin + K≤10 × {car,walk}
+- returns: ETA, route_km, line_km
+- cache 2m, timeout 1.5s
+(경로 위임/캐시/타임아웃)
+end note
+
+note right of DB
+Core Tables (indexes)
+- hospital(hpid PK, name_norm, lat, lon, addr_road, region_code)
+- hospital_status(hpid, hvidate, hvec, hv2..hv6, hvoc)
+- hli_snapshot(hpid PK, status_id FK, score, level, lag_sec)
+- disaster_alert(id PK, issued_at, severity, ttl, is_active)
+- alert_region_map(alert_id, region_code)
+end note
+
+' ---------------- LEGEND (영·한) ----------------
+legend right
+**Client API (from SPA / 클라이언트 호출)**
+C1  GET /api/hospitals?center&radius_km
+C4  POST /api/disasters/evaluate (hpids[])
+C7  GET /api/hospitals/{hpid}
+
+**API ↔ DB**
+C2  read hospitals + HLI / 병원+HLI 조회
+C5  read alerts/regions → blocked,severity,badges / 경보·지역 조회
+C8  read ICU detail (hv2..hv6,hvoc, icu_avail) / 상세
+
+**API → Client**
+C3  hospitals list + HLI / 목록+요약
+C6  evaluate result / 평가결과
+C9  detail payload / 상세응답
+
+**Pipelines (배치/잡)**
+P1  Kakao geocode/reverse / 지오코딩
+P2  upsert Hospital / 마스터 적재
+P3  NMC status pull / 상태 수집
+P4  upsert HospitalStatus
+P5  upsert HliSnapshot (latest)
+P6  write score/penalty log
+P7  pull MOIS alerts
+P8  upsert DisasterAlert
+P9  classify → A5 / 지역 매핑
+P10 upsert AlertRegionMap
+
+**TMAP**
+T1  POST /api/tmap/route
+T2  call TMAP REST / 경로·ETA 위임
+T3  ETA/route_km/line_km
+endlegend
+@enduml

@@ -5,7 +5,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 @Entity
 @Table(name="alert_keyword")
@@ -24,13 +25,28 @@ public class AlertKeyword {
     private String pattern; //재난문자 본문(msg)에서 탐지할 정규식 패턴
 
     @Column(nullable=false)
-    private Boolean enabled=true; //규칙 활성 여부 (false일 경우 탐지 대상에서 제외)
+    private Boolean enabled = true; //규칙 활성 여부 (false일 경우 탐지 대상에서 제외)
 
     //규칙 우선순위 (낮을수록 우선 적용)
     //BLOCK(10) < WARN(50) < IGNORE(100)
     @Column(nullable=false)
-    private Integer priority=100;
+    private Integer priority = 100;
 
-    @Column(nullable=false)
-    private LocalDateTime updatedAt;
+    /**
+     * 규칙의 최종 수정 시각 (UTC Instant)
+     */
+    @Column(name = "updated_at", nullable = false, columnDefinition = "DATETIME(3)")
+    private Instant updatedAt;
+
+    @PrePersist
+    public void prePersist() {
+        if (this.updatedAt == null) {
+            this.updatedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        }
+    }
+
+    @PreUpdate
+    public void preUpdate() {
+        this.updatedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+    }
 }

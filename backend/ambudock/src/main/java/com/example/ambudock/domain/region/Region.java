@@ -1,12 +1,11 @@
 package com.example.ambudock.domain.region;
 
-
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
-import jakarta.persistence.Id;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 @Entity
 @Table(name="region")
@@ -17,7 +16,7 @@ public class Region {
     @GeneratedValue(strategy= GenerationType.IDENTITY)
     private Long regionId;
 
-    //행정구역 코드 (법정동 코드 등)
+    // 행정구역 코드 (법정동 코드 등)
     @Column(nullable=false,unique=true,length=20)
     private String code;
 
@@ -33,9 +32,21 @@ public class Region {
     @Column(length=100)
     private String nameDong;
 
-    @Column(nullable=false)
-    private LocalDateTime createdAt;
+    @Column(name = "created_at", nullable = false, columnDefinition = "DATETIME(3)")
+    private Instant createdAt;
 
-    @Column(nullable=false)
-    private LocalDateTime updatedAt;
+    @Column(name = "updated_at", nullable = false, columnDefinition = "DATETIME(3)")
+    private Instant updatedAt;
+
+    @PrePersist
+    public void prePersist() {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        if (this.createdAt == null) this.createdAt = now;
+        if (this.updatedAt == null) this.updatedAt = now;
+    }
+
+    @PreUpdate
+    public void preUpdate() {
+        this.updatedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+    }
 }

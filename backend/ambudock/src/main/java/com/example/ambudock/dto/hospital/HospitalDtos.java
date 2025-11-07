@@ -6,7 +6,7 @@ import lombok.Builder;
 import lombok.Getter;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 public class HospitalDtos {
@@ -18,7 +18,7 @@ public class HospitalDtos {
         private String color;
         private int lagSec;
         private String staleLevel;
-        private LocalDateTime updatedAt;
+        private Instant updatedAt;    // 변경: LocalDateTime -> Instant (UTC)
     }
 
     @Getter @Builder
@@ -45,4 +45,3 @@ public class HospitalDtos {
         private List<HospitalListItem> items;
     }
 }
-

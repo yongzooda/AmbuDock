@@ -77,3 +77,6 @@ frontend/package-lock.json.bak
 
 # MacOS metadata
 __MACOSX/
+
+# env
+.env
