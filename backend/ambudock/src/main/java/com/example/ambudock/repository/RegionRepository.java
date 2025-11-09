@@ -3,5 +3,9 @@ package com.example.ambudock.repository;
 import com.example.ambudock.domain.region.Region;
 import org.springframework.data.jpa.repository.JpaRepository;
 
-public interface RegionRepository extends JpaRepository<Region, Long> { }
+import java.util.Optional;
 
+public interface RegionRepository extends JpaRepository<Region, Long> {
+    Optional<Region> findByCode(String code);
+    boolean existsByCode(String code);
+}

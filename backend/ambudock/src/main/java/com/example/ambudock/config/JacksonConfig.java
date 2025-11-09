@@ -15,21 +15,18 @@ public class JacksonConfig {
 
     @Bean
     public ObjectMapper objectMapper() {
-        // JsonMapper.builder().findAndAddModules()는 classpath에 있는 모듈을 자동으로 등록합니다.
+        // JsonMapper.builder().findAndAddModules()는 classpath에 있는 Jackson 모듈들(e.g. JavaTimeModule 등)을 자동으로 찾아 등록
         ObjectMapper mapper = JsonMapper.builder()
                 .findAndAddModules()
                 .build();
 
-        // 안전을 위해 JavaTimeModule을 명시적으로 한 번 더 등록 (중복 등록해도 안전)
-        mapper.registerModule(new JavaTimeModule());
-
-        // 날짜를 숫자타입(timestamp)으로 쓰지 않고 ISO-8601 문자열로 직렬화
+        // 날짜를 숫자(timestamp)로 쓰는 대신 ISO-8601 문자열("2025-11-07T...Z")로 직렬화하게 함.
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-        // null 필드 제외
+        // JSON 출력 시 null인 필드는 아예 제외하도록 설정 (payload를 더 깔끔하게).
         mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
-        // 전역 직렬화/역직렬화 타임존을 UTC로 고정
+        // 전역(기본) 직렬화/역직렬화 타임존을 UTC로 고정.
         mapper.setTimeZone(TimeZone.getTimeZone("UTC"));
 
         return mapper;
