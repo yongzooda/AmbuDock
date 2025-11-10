@@ -15,32 +15,44 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 @RequestMapping(value = "/api/tmap", produces = MediaType.APPLICATION_JSON_VALUE)
 
-//프론트엔드 → 백엔드 → SK TMAP Proxy 호출을 중계하는 진입점.
+// 프론트엔드 → 백엔드 → SK TMAP Proxy 호출을 중계하는 진입점 컨트롤러
 public class TmapProxyController {
 
     private final TmapProxyService tmap;
 
     /**
      * 후보 K(≤10) 병원에 대해 차량/도보 ETA와 직선거리(line_km)를 계산.
-     * - 입력: origin("lat,lon") + candidates[hpid, lat, lon] + options(차량/도보)
-     * - 출력: 병원별 ETA/route_km/line_km/source("TMAP"|"ESTIMATE")
-     * - 정책: 캐시 2분, 타임아웃 1.5s, 실패 시 “ESTIMATE”
+     *
+     * 엔드포인트: POST /api/tmap/route
+     *
+     * 동작 흐름:
+     *  - 요청 바디를 DTO로 바인딩 및 검증(@Valid)
+     *  - 후보 개수(K) 안전 검사 (K <= 10)
+     *  - 클라이언트 IP 추출 (X-Forwarded-For 우선 -> fallback remoteAddr)
+     *  - TmapProxyService 호출 (실제 TMAP 프록시/캐시/타임아웃/대체 로직)
+     *  - 결과를 HTTP 200으로 반환
+     *
      */
     @PostMapping(path = "/route", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<TmapDtos.RouteResponse> routeForCandidates(
             @RequestBody @Valid TmapDtos.RouteRequest req,
             HttpServletRequest http
     ) {
-        // 안전 가드: 후보 병원 개수 제한(K ≤ 10)
+        // ---------- 안전 가드: 후보 개수 제한 ----------
+        // 컨트롤러 레벨에서 K 제한을 한 번 더 확인.
         if (req.getCandidates().size() > 10) {
+            // 요청이 허용 범위를 초과했을 때 명시적 에러 반환.
             return ResponseEntity.badRequest()
                     .body(new TmapDtos.RouteResponse(
                             null, 0L, "BAD_REQUEST:K>10", 0
                     ));
         }
-        // 요청자의 IP 추출 (X-Forwarded-For 헤더 → fallback: remoteAddr)
+        // ---------- 클라이언트 IP 추출 ----------
+        // 로깅 / 트래픽 제어 / 장애 분석 목적으로 IP 전달.
         String clientIp = extractClientIp(http);
-        // 실제 TMAP Proxy 서비스 호출 (DB 설정값 기반 WebClient)
+
+        // ---------- 실제 서비스 호출(비즈니스 로직 위임) ----------
+        // TmapDtos.RouteResponse가 res에 채워짐
         var res = tmap.routeForCandidates(req, clientIp);
 
         // 정상 응답 반환 (HTTP 200 + JSON)
