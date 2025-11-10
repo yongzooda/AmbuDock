@@ -3,6 +3,7 @@ package com.example.ambudock.service;
 import com.example.ambudock.dto.tmap.TmapDtos;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -20,14 +21,17 @@ import java.util.List;
  * - 프론트가 보낸 후보 병원 K(≤10)에 대해 백엔드 TMAP 프록시(/api/tmap/route)를 호출하고 표준 응답으로 변환
  * - 실패(타임아웃/오류/빈 응답) 시, 직선거리 기반 추정치(source="ESTIMATE")로 대체
  * - 결과는 @Cacheable("eta")로 120초 캐시 (TTL은 CacheConfig에서 설정)
- * - 프록시 base-url / timeout-ms 는 DB(app_config)에서 읽어와, 변경 시 다음 호출부터 반영
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class TmapProxyService {
 
-    private final AppConfigService cfg;
+    @Value("${tmap.proxy.base-url}")
+    private String tmapBaseUrl;
+
+    @Value("${tmap.proxy.timeout-ms:1500}")
+    private int tmapTimeoutMs;
 
     /* ---------------- WebClient 재사용 ---------------- */
 
@@ -39,10 +43,9 @@ public class TmapProxyService {
     /**
      * AppConfig의 TMAP_PROXY_URL을 읽어 WebClient를 제공.
      * - 동일 URL이면 재사용, 바뀌면 재생성
-     * - 기본값: http://localhost:8080
      */
     private WebClient client() {
-        String baseUrl = cfg.get("TMAP_PROXY_URL", "http://localhost:8080");
+        String baseUrl = tmapBaseUrl;
         WebClient local = cachedClient;
         if (local != null && baseUrl.equals(lastBaseUrl)) {
             return local;
@@ -78,24 +81,26 @@ public class TmapProxyService {
             throw new IllegalArgumentException("origin format must be 'lat,lon'");
         }
 
-        //2) 타임아웃(ms) 설정: DB(AppConfig)에서 읽되 하한 500ms 보장
-        int timeoutMs = Math.max(500, cfg.getInt("TMAP_PROXY_TIMEOUT_MS", 1500));
+        //2) 타임아웃(ms) 설정: 하한 500ms 보장
+        int timeoutMs = Math.max(500, tmapTimeoutMs);
 
         try {
             // 3) 우리 백엔드의 TMAP 프록시를 호출 (실제 SK 호출은 프록시가 수행)
-            TmapDtos.RouteResponse res = client().post()
-                    .uri("/api/tmap/route") // 프록시 표준 엔드포인트
-                    .contentType(MediaType.APPLICATION_JSON)
+
+
+            TmapDtos.RouteResponse res = client().post() //WebClient 인스턴스(이미 구성된 baseUrl 사용)로 POST 요청 준비
+                    .uri("/api/tmap/route") // 요청 URI: baseUrl + "/api/tmap/route"
+                    .contentType(MediaType.APPLICATION_JSON) //Accept 헤더: 서버가 JSON 응답을 보내길 기대
                     .accept(MediaType.APPLICATION_JSON)
-                    .bodyValue(req)                               // {origin, candidates[], options{car,walk}}
-                    .retrieve()
-                    .bodyToMono(TmapDtos.RouteResponse.class)
+                    .bodyValue(req)         //요청 바디에 Java 객체(req)를 넣으면 Jackson이 JSON으로 직렬화해서 전송
+                    .retrieve()         //요청을 전송하고(비동기) 응답을 받을 준비를 함
+                    .bodyToMono(TmapDtos.RouteResponse.class)//응답 본문을 역직렬화
                     .timeout(Duration.ofMillis(timeoutMs))        // 네트워크 상한
-                    .onErrorResume(e -> {           // 4) 네트워크/서버 오류 시 비우고 폴백 유도
+                    .onErrorResume(e -> {           // 네트워크/서버 오류 시 비우고 폴백 유도
                         log.warn("TMAP proxy error ({} ms timeout). cause={}", timeoutMs, e.toString());
                         return Mono.empty();
                     })
-                    .block();
+                    .block(); //Mono를 블로킹해서 실제 결과 객체를 동기적으로 얻음
 
             // 5) 정상 응답: 아이템이 있으면 그대로 반환
             if (res != null && res.getItems() != null && !res.getItems().isEmpty()) {

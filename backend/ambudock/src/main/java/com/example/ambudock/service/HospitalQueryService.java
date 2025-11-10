@@ -34,7 +34,6 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class HospitalQueryService {
-    // Repository / service 의존성 주입
     private final HospitalRepository hospitalRepo;
     private final HospitalStatusRepository statusRepo;
     private final HliSnapshotRepository hliRepo;
@@ -55,6 +54,8 @@ public class HospitalQueryService {
     @Transactional(readOnly=true)
     public HospitalDtos.NearbyResponse listNearby(double lat,double lon,double radiusKm){
 
+        // -------------------------
+        // 신선도(stale) 관련 설정값을 AppConfigService에서 로드
         // - soft: 'soft' 스테일 기준(초). 이 내이면 신선한 데이터로 판단.
         // - hard: 'hard' 스테일 기준(초). 이 이상이면 데이터 신뢰도 거의 없음.
         // - penalty: 지연(lag)에 대한 soft 패널티(점수 감소 등) 값.
