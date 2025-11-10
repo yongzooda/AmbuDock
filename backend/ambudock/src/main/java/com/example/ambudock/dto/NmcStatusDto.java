@@ -18,7 +18,7 @@ import java.time.Instant;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class NemcStatusDto {
+public class NmcStatusDto {
 
     @JsonProperty("hpid")
     private String hpid;

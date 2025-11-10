@@ -1,6 +1,6 @@
 package com.example.ambudock.scheduler.client;
 
-import com.example.ambudock.dto.NemcStatusDto;
+import com.example.ambudock.dto.NmcStatusDto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -21,18 +21,18 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class NemcClient {
+public class NmcClient {
 
-    @Value("${app.nemc.timeout_ms:1500}")
+    @Value("${app.nmc.timeout_ms:1500}")
     private int timeoutMs;
 
-    @Value("${app.nemc.openapi.base}")
+    @Value("${app.nmc.openapi.base}")
     private String openApiBase;
 
-    @Value("${app.nemc.openapi.endpoint}")
+    @Value("${app.nmc.openapi.endpoint}")
     private String endpoint;
 
-    @Value("${app.nemc.openapi.service_key}")
+    @Value("${app.nmc.openapi.service_key}")
     private String serviceKey;
 
     private final ObjectMapper om = new ObjectMapper();
@@ -44,12 +44,12 @@ public class NemcClient {
     }
 
     /** 지역(시/도, 시/군/구)을 지정해서 수집한다. 페이징은 내부에서 흡수. */
-    public List<NemcStatusDto> fetchLatestStatuses(String stage1, String stage2) {
+    public List<NmcStatusDto> fetchLatestStatuses(String stage1, String stage2) {
         final int timeout = Math.max(500, timeoutMs);
         final int pageSize = 200;
         int pageNo = 1;
 
-        List<NemcStatusDto> acc = new ArrayList<>();
+        List<NmcStatusDto> acc = new ArrayList<>();
         try {
             while (true) {
                 String url = UriComponentsBuilder
@@ -85,15 +85,15 @@ public class NemcClient {
             }
             return acc;
         } catch (Exception ex) {
-            log.warn("NemcClient fetchLatestStatuses failed: stage1={}, stage2={}, cause={}",
+            log.warn("NmcClient fetchLatestStatuses failed: stage1={}, stage2={}, cause={}",
                     stage1, stage2, ex.toString());
             return Collections.emptyList();
         }
     }
 
     // ---------- mapping (네 DTO 필드에 맞춤) ----------
-    private NemcStatusDto mapToDto(JsonNode n) {
-        NemcStatusDto dto = new NemcStatusDto();
+    private NmcStatusDto mapToDto(JsonNode n) {
+        NmcStatusDto dto = new NmcStatusDto();
         dto.setHpid(text(n, "hpid"));
         dto.setDutyname(text(n, "dutyname", "dutyName"));
         dto.setDutytel3(text(n, "dutytel3", "dutyTel3"));

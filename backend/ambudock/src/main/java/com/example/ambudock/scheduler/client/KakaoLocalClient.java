@@ -72,6 +72,7 @@ public class KakaoLocalClient {
     }
 
     /** 좌표 → 행정구역 (가장 상위 1건 반환) */
+    /** 좌표 → 행정구역 (법정동(B)만 반환; 없으면 null) */
     public Region reverseRegion(double lat, double lon) {
         if (isKeyMissing()) {
             log.warn("Kakao reverse-region skipped: REST API key is empty. Set app.kakao.rest_api_key or KAKAO_REST_API_KEY env.");
@@ -86,9 +87,16 @@ public class KakaoLocalClient {
                             .build())
                     .retrieve()
                     .bodyToMono(RegionCodeResp.class);
+
             RegionCodeResp resp = mono.block(Duration.ofMillis(timeout));
             if (resp == null || resp.getDocuments() == null || resp.getDocuments().isEmpty()) return null;
-            return resp.getDocuments().get(0);
+
+            // ★ 법정동(B) 우선 선택, 없으면 null
+            for (Region d : resp.getDocuments()) {
+                if ("B".equals(d.getRegionType())) return d;
+            }
+            log.warn("Kakao reverse-region: no LEGAL(B) region found for ({},{})", lat, lon);
+            return null;
         } catch (Exception e) {
             log.warn("Kakao reverse failed(lat={},lon={}): {}", lat, lon, e.toString());
             return null;
@@ -144,15 +152,15 @@ public class KakaoLocalClient {
     public static class Region {
         private String code; // 행정구역 코드
 
+        @JsonProperty("region_type")           // ← 추가: B(법정동) / H(행정동)
+        private String regionType;
+
         @JsonProperty("region_1depth_name")
         private String region1depthName;  // 시/도
-
         @JsonProperty("region_2depth_name")
         private String region2depthName;  // 시/군/구
-
         @JsonProperty("region_3depth_name")
         private String region3depthName;  // 읍/면/동
-
         @JsonProperty("address_name")
         private String addressName;       // 전체 주소
     }
