@@ -1,86 +1,113 @@
 package com.example.ambudock.scheduler.client;
 
 import com.example.ambudock.dto.MoisAlertDto;
-import com.example.ambudock.domain.common.enums.Severity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import io.netty.channel.ChannelOption;
+import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.handler.timeout.WriteTimeoutHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
-import org.springframework.http.HttpStatusCode;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+/**
+ * MoisClient
+ *
+ * 책임 분리 원칙에 따라 이 클래스는 "원문 수집/정규화"만 담당한다.
+ *  - 심각도 판정(Severity), TTL 계산, 지역 매핑은 DisasterIngestService가 수행한다.
+ *  - 여기서는 원문에서 얻을 수 있는 필수 필드(md101Sn, issuedAt, locationName, msg 등)와
+ *    판정에 도움이 되는 '힌트 필드'(emrgStepName, hazardName)까지만 세팅한다.
+ *
+ * 기대 설정값(application.yml):
+ *   app.mois.base_url:       "https://www.safetydata.go.kr" (예시)
+ *   app.mois.endpoint_path:  "/v2/api/DSSF-IP-00247"
+ *   app.mois.service_key:    "<발급받은키>"
+ *   app.mois.timeout_ms:     1500
+ *   app.mois.default_rows:   50
+ *   app.mois.query-zone:     "Asia/Seoul"
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class MoisClient {
 
-    @Value("${app.mois.base_url:https://www.safetydata.go.kr}")
+    @Value("${app.mois.base_url}")
     private String baseUrl;
 
-    @Value("${app.mois.endpoint_path:/v2/api/DSSF-IP-00247}")
+    @Value("${app.mois.endpoint_path}")
     private String endpointPath;
 
-    @Value("${app.mois.service_key:}")
+    @Value("${app.mois.service_key}")
     private String serviceKey;
 
-    @Value("${app.mois.timeout_ms:2000}")
+    @Value("${app.mois.timeout_ms:1500}")
     private int timeoutMs;
 
-    @Value("${app.mois.default_rows:100}")
+    @Value("${app.mois.default_rows:50}")
     private int defaultRows;
 
+    /** 쿼리 기준 '오늘'을 계산할 타임존 (기본 KST). */
+    @Value("${app.mois.query-zone:Asia/Seoul}")
+    private String queryZone;
+
+    /** 테스트 용 Clock(필요하면 @Autowired/생성자 주입으로 바꿀 수 있음). */
+    private final Clock clock = Clock.systemUTC();
+
+    /** Jackson ObjectMapper (스레드-세이프하게 재사용). */
     private final ObjectMapper om = new ObjectMapper();
 
-    private WebClient newClient() {
-        int connectTimeout = Math.max(500, timeoutMs);
-        HttpClient http = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeout)
-                .responseTimeout(Duration.ofMillis(connectTimeout))
-                .doOnConnected(conn -> conn
-                        .addHandlerLast(new io.netty.handler.timeout.ReadTimeoutHandler(connectTimeout, TimeUnit.MILLISECONDS))
-                        .addHandlerLast(new io.netty.handler.timeout.WriteTimeoutHandler(connectTimeout, TimeUnit.MILLISECONDS)));
+    /* ======================================================================
+     * 퍼블릭 API
+     * ====================================================================== */
 
-        return WebClient.builder()
-                .baseUrl(baseUrl)
-                .clientConnector(new ReactorClientHttpConnector(http)) // ✅ 수정
-                .defaultHeader("Accept", MediaType.APPLICATION_JSON_VALUE)
-                .build();
-    }
-
-    /** 오늘(KST) 생성 기준 최신 N건 */
+    /**
+     * 오늘(쿼리존 기준) 이후 생성분의 최신 N건을 조회한다.
+     * - DisasterIngestService가 주기적으로 호출하여 ingest 대상 원문을 가져간다.
+     */
     public List<MoisAlertDto> fetchLatestAlerts() {
-        LocalDate todayKST = LocalDate.now(ZoneId.of("Asia/Seoul"));
-        return fetchAlerts(todayKST.format(DateTimeFormatter.BASIC_ISO_DATE), null, 1, defaultRows);
+        ZoneId zid = ZoneId.of(queryZone);
+        LocalDate today = LocalDate.now(zid);
+        String sinceYmd = today.format(DateTimeFormatter.BASIC_ISO_DATE); // yyyyMMdd
+        return fetchAlerts(sinceYmd, null, 1, defaultRows);
     }
 
-    /** since(YYYYMMDD) 이후, rgnNm(선택) 필터 */
+    /**
+     * 실제 MOIS API 호출 및 원문 정규화.
+     *
+     * @param sinceYmd   YYYYMMDD (crtDt 파라미터)
+     * @param regionName rgnNm (선택)
+     * @param page       pageNo (1기반)
+     * @param rows       numOfRows
+     * @return MoisAlertDto 리스트 (issuedAt 내림차순 정렬)
+     */
     public List<MoisAlertDto> fetchAlerts(String sinceYmd, String regionName, int page, int rows) {
         if (StringUtils.isBlank(serviceKey)) {
-            log.warn("MOIS serviceKey is empty. Skip call.");
-            return Collections.emptyList();
+            log.warn("MOIS serviceKey is empty. Skip calling.");
+            return List.of();
         }
 
         try {
             WebClient wc = newClient();
 
-            // NOTE: 호출 403 뜨면 인코딩을 제거하고 원본 키를 그대로 전달해 보세요.
+            // 일부 공공 API는 URL-인코딩된 키를 거부할 수 있음 → 문제가 있으면 raw 키로 교체 시도.
             String encodedKey = URLEncoder.encode(serviceKey, StandardCharsets.UTF_8);
 
             WebClient.RequestHeadersSpec<?> spec = wc.get()
@@ -88,8 +115,8 @@ public class MoisClient {
                         var ub = builder.path(endpointPath)
                                 .queryParam("serviceKey", encodedKey)
                                 .queryParam("returnType", "json")
-                                .queryParam("pageNo", Math.max(page, 1))
-                                .queryParam("numOfRows", Math.max(rows, 1));
+                                .queryParam("pageNo", Math.max(1, page))
+                                .queryParam("numOfRows", Math.max(1, rows));
                         if (StringUtils.isNotBlank(sinceYmd)) {
                             ub.queryParam("crtDt", sinceYmd);
                         }
@@ -101,28 +128,28 @@ public class MoisClient {
                     .accept(MediaType.APPLICATION_JSON);
 
             JsonNode root = spec.retrieve()
-                    .onStatus(HttpStatusCode::isError,            // ✅ HttpStatusCode 로 변경
-                            res -> res.createException().flatMap(Mono::error)) // ✅ 반환타입도 정확
+                    .onStatus(HttpStatusCode::isError, res -> res.createException().flatMap(Mono::error))
                     .bodyToMono(String.class)
                     .timeout(Duration.ofMillis(Math.max(500, timeoutMs)))
                     .map(this::readTreeSafe)
                     .onErrorResume(ex -> {
-                        log.warn("MOIS fetch failed: url={}{}, cause={}", baseUrl, endpointPath, ex.toString());
+                        log.warn("MOIS fetch failed: {}{} cause={}", baseUrl, endpointPath, ex.toString());
                         return Mono.just(om.createObjectNode());
                     })
                     .block();
 
-            if (root == null || root.isEmpty()) return Collections.emptyList();
+            if (root == null || root.isEmpty()) return List.of();
 
             ArrayNode items = extractItemsArray(root);
-            if (items == null || items.isEmpty()) return Collections.emptyList();
+            if (items == null || items.isEmpty()) return List.of();
 
             List<MoisAlertDto> list = new ArrayList<>(items.size());
             for (JsonNode n : items) {
-                list.add(mapToDto(n));
+                MoisAlertDto dto = mapToDtoWithSpec(n);
+                if (dto != null) list.add(dto);
             }
 
-            // 최신 issuedAt 기준 내림차순
+            // issuedAt 내림차순 정렬 (null은 맨 뒤로)
             return list.stream()
                     .sorted(Comparator.comparing(
                             (MoisAlertDto d) -> Optional.ofNullable(d.getIssuedAt()).orElse(Instant.EPOCH)
@@ -130,21 +157,51 @@ public class MoisClient {
                     .collect(Collectors.toList());
 
         } catch (Exception e) {
-            log.warn("MOIS fetch error: cause={}", e.toString());
-            return Collections.emptyList();
+            log.warn("MOIS fetch error: {}", e.toString());
+            return List.of();
         }
     }
 
-    /* -------------------- 내부 유틸 -------------------- */
+    /* ======================================================================
+     * 내부 유틸
+     * ====================================================================== */
 
+    /**
+     * timeout/핸들러가 설정된 WebClient 생성.
+     * - 호출 빈도가 높다면 @Bean 단일 인스턴스로 재사용해도 됨.
+     */
+    private WebClient newClient() {
+        int connectTimeout = Math.max(500, timeoutMs);
+
+        HttpClient http = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeout)
+                .responseTimeout(Duration.ofMillis(connectTimeout))
+                .doOnConnected(conn -> conn
+                        .addHandlerLast(new ReadTimeoutHandler(connectTimeout, TimeUnit.MILLISECONDS))
+                        .addHandlerLast(new WriteTimeoutHandler(connectTimeout, TimeUnit.MILLISECONDS)));
+
+        return WebClient.builder()
+                .baseUrl(baseUrl)
+                .clientConnector(new ReactorClientHttpConnector(http))
+                .defaultHeader("Accept", MediaType.APPLICATION_JSON_VALUE)
+                .build();
+    }
+
+    /** 안전한 JSON 파싱. 실패 시 빈 ObjectNode 반환. */
     private JsonNode readTreeSafe(String raw) {
-        try { return om.readTree(raw); }
-        catch (Exception e) {
-            log.warn("MOIS JSON parse error: body(length={}), cause={}", raw == null ? 0 : raw.length(), e.toString());
+        try {
+            return om.readTree(raw);
+        } catch (Exception e) {
+            log.warn("MOIS JSON parse error: bodyLen={} cause={}", raw == null ? 0 : raw.length(), e.toString());
             return om.createObjectNode();
         }
     }
 
+    /**
+     * 다양한 스펙을 고려하여 항목 배열을 찾아낸다.
+     *  - 우선순위: data 배열 → response.body.items → DFS로 서명 검사
+     *  - 항목의 대표 키: SN, CRT_DT, MSG_CN, RCPTN_RGN_NM 등
+     */
     private ArrayNode extractItemsArray(JsonNode root) {
         if (root.has("data") && root.get("data").isArray()) {
             return (ArrayNode) root.get("data");
@@ -153,90 +210,121 @@ public class MoisClient {
                 && root.path("response").path("body").get("items").isArray()) {
             return (ArrayNode) root.path("response").path("body").get("items");
         }
-        Deque<JsonNode> stack = new ArrayDeque<>();
-        stack.push(root);
-        while (!stack.isEmpty()) {
-            JsonNode cur = stack.pop();
+
+        Deque<JsonNode> st = new ArrayDeque<>();
+        st.push(root);
+        while (!st.isEmpty()) {
+            JsonNode cur = st.pop();
+
             if (cur.isArray() && cur.size() > 0 && cur.get(0).isObject()) {
                 JsonNode first = cur.get(0);
-                if (first.has("MSG_CN") || first.has("RCPTN_RGN_NM") || first.has("CRT_DT")) {
+                if (first.has("MSG_CN") || first.has("RCPTN_RGN_NM") || first.has("CRT_DT") || first.has("SN")) {
                     return (ArrayNode) cur;
                 }
             }
-            if (cur.isObject()) cur.fields().forEachRemaining(e -> stack.push(e.getValue()));
-            else if (cur.isArray()) cur.forEach(stack::push);
+            if (cur.isObject()) cur.fields().forEachRemaining(e -> st.push(e.getValue()));
+            else if (cur.isArray()) cur.forEach(st::push);
         }
         return null;
     }
 
-    /** 신/구 스펙 → 기존 MoisAlertDto 로 매핑 */
-    private MoisAlertDto mapToDto(JsonNode n) {
+    /**
+     * 스펙(이미지) 기반으로 JsonNode → MoisAlertDto 매핑.
+     *  - 여기서는 '힌트 필드'까지만 세팅(emrgStepName, hazardName).
+     *  - severity/TTL 계산은 절대 하지 않는다.
+     */
+    private MoisAlertDto mapToDtoWithSpec(JsonNode n) {
+        // ID: md101Sn(신) 또는 SN(구)
         String md101Sn = firstNonBlank(text(n, "md101Sn"), text(n, "SN"));
+
+        // 메시지 본문
         String msg = firstNonBlank(text(n, "msg"), text(n, "MSG_CN"));
+
+        // 지역명(수신지역명)
         String locationName = firstNonBlank(text(n, "locationName"), text(n, "RCPTN_RGN_NM"));
-        String locationId = text(n, "location_id"); // 없을 수 있음
 
-        String crtDt = text(n, "CRT_DT");
-        String regYmd = text(n, "REG_YMD");
-        Instant issuedAt = parseToInstantKST(crtDt);
-        if (issuedAt == null) issuedAt = parseToInstantKST(regYmd);
+        // locationId는 신스펙에서 제공되지 않을 수 있음 → null 허용
+        String locationId = text(n, "location_id");
 
-        // 가능하면 심각도 유추(없으면 null → A4에서 보정/TTL 부여)
-        String stepName = firstNonBlank(text(n, "severity"), text(n, "EMRG_STEP_NM"));
-        Severity severity = deriveSeverity(stepName, msg);
+        // 발행시각: CRT_DT → REG_YMD 순으로 시도(KST 해석 → Instant(UTC))
+        Instant issuedAt = parseToInstantPreferKst(n, "CRT_DT", "REG_YMD");
 
-        return new MoisAlertDto(md101Sn, issuedAt, locationId, locationName, msg, severity, null);
+        // 원문 힌트: 단계명/재난유형명
+        String emrgStepName = firstNonBlank(text(n, "emrgStepName"), text(n, "EMRG_STEP_NM"));
+        String hazardName   = firstNonBlank(text(n, "hazardName"),   text(n, "DST_SE_NM"));
+
+        if (md101Sn == null && msg == null && locationName == null) {
+            // 완전 무의미한 레코드는 버림(선택)
+            return null;
+        }
+
+        return new MoisAlertDto(md101Sn, issuedAt, locationId, locationName, msg, emrgStepName, hazardName);
     }
 
-    private String text(JsonNode n, String key) {
-        JsonNode v = n.get(key);
-        return v == null || v.isNull() ? null : v.asText();
+    /**
+     * 주어진 키들을 시도하여 날짜/시간 문자열을 KST로 해석하고 UTC Instant로 변환.
+     * - keyPrimary 실패 시 keyFallback 사용.
+     */
+    private Instant parseToInstantPreferKst(JsonNode n, String keyPrimary, String keyFallback) {
+        Instant p = parseToInstantKst(text(n, keyPrimary));
+        if (p != null) return p;
+        return parseToInstantKst(text(n, keyFallback));
     }
 
-    private static String firstNonBlank(String a, String b) {
-        return (a != null && !a.isBlank()) ? a : ((b != null && !b.isBlank()) ? b : null);
-    }
-
-    /** 다양한 포맷을 수용하고 KST로 해석 후 UTC Instant로 변환 */
-    private Instant parseToInstantKST(String s) {
+    /**
+     * 여러 포맷을 허용하여 KST(Local) → UTC Instant 변환.
+     * - 날짜만 있으면 KST 자정으로 간주.
+     * - 오프셋 포함 ISO는 오프셋 존중.
+     */
+    private Instant parseToInstantKst(String s) {
         if (StringUtils.isBlank(s)) return null;
         final ZoneId KST = ZoneId.of("Asia/Seoul");
-        String[] patterns = new String[] {
+
+        String[] patterns = new String[]{
                 "yyyy-MM-dd HH:mm:ss",
                 "yyyy/MM/dd HH:mm:ss",
                 "yyyyMMddHHmmss",
-                "yyyy-MM-dd'T'HH:mm:ssXXX",
-                "yyyy-MM-dd'T'HH:mm:ss",
+                "yyyy-MM-dd'T'HH:mm:ssXXX", // 2025-11-07T23:30:00+09:00
+                "yyyy-MM-dd'T'HH:mm:ss",    // 오프셋 없으면 KST 가정
                 "yyyyMMdd",
                 "yyyy-MM-dd"
         };
+
         for (String p : patterns) {
             try {
-                if (p.equals("yyyyMMdd") || p.equals("yyyy-MM-dd")) {
+                if ("yyyyMMdd".equals(p) || "yyyy-MM-dd".equals(p)) {
                     LocalDate d = LocalDate.parse(s, DateTimeFormatter.ofPattern(p));
                     return d.atStartOfDay(KST).toInstant();
+                } else if ("yyyy-MM-dd'T'HH:mm:ssXXX".equals(p)) {
+                    return OffsetDateTime.parse(s, DateTimeFormatter.ofPattern(p)).toInstant();
                 } else {
                     LocalDateTime dt = LocalDateTime.parse(s, DateTimeFormatter.ofPattern(p));
                     return dt.atZone(KST).toInstant();
                 }
-            } catch (Exception ignore) {}
+            } catch (DateTimeParseException ignore) {
+                // 다음 패턴 시도
+            } catch (Exception ignore) {
+            }
         }
-        log.debug("MOIS date parse failed: '{}'", s);
+
+        // 마지막 시도: 자유 형식 ISO
+        try {
+            return Instant.parse(s);
+        } catch (Exception ignore) {}
+
+        log.debug("MOIS date parse failed for value='{}'", s);
         return null;
     }
 
-    /** EMRG_STEP_NM/본문 키워드 기반 간단 심각도 유추 (없으면 null) */
-    private Severity deriveSeverity(String stepName, String msg) {
-        if (stepName == null && msg == null) return null;
-        String s = stepName == null ? "" : stepName.toLowerCase();
-        String m = msg == null ? "" : msg.toLowerCase();
+    /* ---------------- 작은 헬퍼 ---------------- */
 
-        if (s.contains("경보") || s.contains("대피") || s.contains("통제")) return Severity.BLOCK;
-        if (s.contains("주의") || s.contains("주의보")) return Severity.WARN;
+    private String text(JsonNode n, String key) {
+        if (n == null || key == null) return null;
+        JsonNode v = n.get(key);
+        return (v == null || v.isNull()) ? null : v.asText();
+    }
 
-        if (m.contains("대피") || m.contains("전면 통제") || m.contains("통제")) return Severity.BLOCK;
-        if (m.contains("주의") || m.contains("강풍") || m.contains("호우") || m.contains("주의보")) return Severity.WARN;
-
-        return null;
+    private static String firstNonBlank(String a, String b) {
+        return (a != null && !a.isBlank()) ? a : ((b != null && !b.isBlank()) ? b : null);
     }
 }

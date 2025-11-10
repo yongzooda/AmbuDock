@@ -33,12 +33,12 @@ app:
     rest_api_key: ${KAKAO_REST_API_KEY}
     timeout_ms: 1500
 
-  nemc:
+  nmc:
     timeout_ms: 1500
     openapi:
       base: https://apis.data.go.kr/B552657/ErmctInfoInqireService
       endpoint: getEmrrmRltmUsefulSckbdInfoInqire
-      service_key: ${NEMC_SERVICE_KEY}
+      service_key: ${NMC_SERVICE_KEY}
 
   mois:
     timeout_ms: 2000
@@ -46,6 +46,7 @@ app:
     endpoint_path: /v2/api/DSSF-IP-00247
     service_key: ${MOIS_SERVICE_KEY}
     default_rows: 100
+    query-zone: Asia/Seoul
 
 tmap:
   proxy:
@@ -60,8 +61,8 @@ ambudock:
 
 # ---------------- Scheduler intervals (ms) ----------------
 scheduler:
-  nemc_fetch:
-    fixed_delay_ms: 60000     # NEMC 실시간 상태 수집 주기
+  nmc_fetch:
+    fixed_delay_ms: 60000     # NMC 실시간 상태 수집 주기
     initial_delay_ms: 15000
   hli_compute:
     fixed_delay_ms: 60000     # HLI 계산 주기
