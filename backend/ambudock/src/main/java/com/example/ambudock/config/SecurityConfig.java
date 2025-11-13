@@ -23,10 +23,10 @@ import static org.springframework.security.config.Customizer.withDefaults;
 @EnableMethodSecurity // @PreAuthorize 활성화
 public class SecurityConfig {
 
-    @Value("${ambudock.admin.username:admin}")
+    @Value("${ambudock.admin.username}")
     private String adminUsername;
 
-    @Value("${ambudock.admin.password:adminpass}")
+    @Value("${ambudock.admin.password}")
     private String adminPassword;
 
     @Bean

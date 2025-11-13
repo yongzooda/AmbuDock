@@ -1,34 +1,279 @@
-import React from 'react'
+// src/App.tsx
+import { useEffect, useMemo, useState } from 'react';
+import { TopAppHeader } from './components/TopAppHeader';
+import { TopSubline } from './components/TopSubline';
+import { MapView } from './components/MapView';
+import { BottomCardBar } from './components/BottomCardBar';
+import { DetailHalfSheet } from './components/DetailHalfSheet';
+import { TmapHandoffScreen } from './components/TmapHandoffScreen';
+import { TmapOpenedOverlay } from './components/TmapOpenedOverlay';
 
-function App() {
+import { Api } from './lib/api';
+import type {
+  HospitalListItem,
+  TmapCandidate,
+  DataFreshness,
+  HliLevel,
+} from './types';
+import { levelOrder, minutesFromSec } from './utils/format';
+import { useGeolocation } from './hooks/useGeolocation';
+
+type CardState = 'default' | 'loading' | 'eta-pending' | 'warn' | 'gray';
+
+type CardModel = {
+  id: string;
+  rank: number;
+  name: string;
+  level: HliLevel;
+  hli: number;
+  minutesAgo: number;
+  walkMin: number;
+  carMin: number;
+  distanceKm: number;
+  state?: CardState;
+  warnMessage?: string;
+  freshness?: DataFreshness | null; // null 허용(외부에서 넘어오는 경우 방지)
+  phone: string;
+  address: string;
+  erAvailable: number;
+  icuAvailTotal: number;
+  hv?: Partial<{ hv2: number; hv3: number; hv4: number; hv5: number; hv6: number; hvoc: number }>;
+};
+
+const DEFAULT_RADIUS_KM = 15;
+
+/** CardModel 형태인지 검사하는 타입가드 */
+function isCardModel(x: unknown): x is CardModel {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as Record<string, unknown>;
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 text-gray-800">
-      {/* Header */}
-      <header className="w-full bg-blue-600 text-white py-4 shadow-md">
-        <h1 className="text-2xl font-bold text-center">AmbuDock 🚑</h1>
-      </header>
-
-      {/* Main Section */}
-      <main className="flex flex-col items-center mt-10 space-y-6">
-        <h2 className="text-3xl font-semibold text-blue-600">
-          국가 위기 대응 응급실 길안내 서비스
-        </h2>
-
-        <p className="text-gray-600 max-w-md text-center">
-          위급 상황에서 지금 가장 빨리 치료받을 수 있는 병원을 한눈에 확인하세요.
-        </p>
-
-        <button className="bg-blue-500 text-white px-6 py-2 rounded-lg shadow hover:bg-blue-600 transition">
-          주변 병원 보기
-        </button>
-      </main>
-
-      {/* Footer */}
-      <footer className="mt-auto py-4 text-gray-400 text-sm">
-        © 2025 AmbuDock. All rights reserved.
-      </footer>
-    </div>
-  )
+    typeof o.id === 'string' &&
+    typeof o.name === 'string' &&
+    typeof o.hli === 'number' &&
+    typeof o.level === 'string'
+  );
 }
 
-export default App
+/** 외부에서 받은 값을 CardModel로 정규화 (any 금지, unknown 사용) */
+function normalizeCard(c: unknown): CardModel {
+  if (isCardModel(c)) {
+    return {
+      ...c,
+      // null → undefined로 정규화(표시 생략)
+      freshness: c.freshness === null ? undefined : c.freshness,
+      walkMin: c.walkMin ?? 0,
+      carMin: c.carMin ?? 0,
+      erAvailable: c.erAvailable ?? 0,
+      icuAvailTotal: c.icuAvailTotal ?? 0,
+    };
+  }
+  // HospitalListItem처럼 보이면 기본 매핑
+  const h = c as Partial<HospitalListItem>;
+  return {
+    id: String(h?.hpid ?? ''),
+    rank: 0,
+    name: String(h?.name ?? ''),
+    level: (h?.hli?.level ?? 'GRAY') as HliLevel,
+    hli: Number(h?.hli?.score ?? 0),
+    minutesAgo: minutesFromSec(Number(h?.hli?.lagSec ?? 0)),
+    walkMin: 0,
+    carMin: 0,
+    distanceKm: Number(
+      typeof h?.distanceKm === 'number'
+        ? Number(h.distanceKm.toFixed(1))
+        : 0
+    ),
+    state: (h?.hli?.level === 'GRAY' ? 'gray' : 'eta-pending') as CardState,
+    warnMessage: undefined,
+    freshness:
+      h?.hli?.staleLevel === 'FRESH'
+        ? 'FRESH'
+        : h?.hli?.staleLevel === 'SOFT'
+        ? 'SOFT'
+        : undefined,
+    phone: String(h?.telEmergency ?? ''),
+    address: String(h?.addrRoad ?? ''),
+    erAvailable: 0,
+    icuAvailTotal: 0,
+  };
+}
+
+export default function App() {
+  const { coords } = useGeolocation();
+  const [radiusKm] = useState(DEFAULT_RADIUS_KM);
+
+  const [allHospitals, setAllHospitals] = useState<HospitalListItem[]>([]);
+  const [cards, setCards] = useState<CardModel[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const [detail, setDetail] = useState<{ open: boolean; card?: CardModel }>({ open: false });
+  const [handoff, setHandoff] = useState<{ open: boolean; name?: string }>({ open: false });
+  const [opened, setOpened] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      if (!coords) return;
+
+      const center = `${coords.lat},${coords.lon}`;
+      const nearby = await Api.listNearby(center, radiusKm);
+      setAllHospitals(nearby.items);
+
+      const hpids = nearby.items.map((h) => h.hpid);
+      const dis = await Api.evalDisasters(hpids);
+      const warnMap = new Map(dis.results.map((r) => [r.hpid, r]));
+
+      // BLOCK 제외
+      const filtered = nearby.items.filter((h) => !(warnMap.get(h.hpid)?.blocked));
+      const k = filtered.slice(0, Math.min(10, Math.max(5, filtered.length)));
+
+      // ETA 대기 스켈레톤
+      const skeleton: CardModel[] = k.map((h, i) => ({
+        id: h.hpid,
+        rank: i + 1,
+        name: h.name,
+        level: h.hli.level,
+        hli: h.hli.score,
+        minutesAgo: minutesFromSec(h.hli.lagSec),
+        walkMin: 0,
+        carMin: 0,
+        distanceKm: Number(h.distanceKm.toFixed(1)),
+        state: h.hli.level === 'GRAY' ? 'gray' : 'eta-pending',
+        warnMessage: warnMap.get(h.hpid)?.badges?.join(' · ') || undefined,
+        // HARD는 표시 생략(undefined)
+        freshness:
+          h.hli.staleLevel === 'FRESH'
+            ? 'FRESH'
+            : h.hli.staleLevel === 'SOFT'
+            ? 'SOFT'
+            : undefined,
+        phone: h.telEmergency || '',
+        address: h.addrRoad || '',
+        erAvailable: 0,
+        icuAvailTotal: 0,
+      }));
+      setCards(skeleton);
+
+      // TMAP ETA 병합
+      const candidates: TmapCandidate[] = k.map((h) => ({ hpid: h.hpid, lat: h.lat, lon: h.lon }));
+      const route = await Api.tmapRoute(center, candidates);
+
+      const etaMap = new Map(route.items.map((r) => [r.hpid, r]));
+      const merged: CardModel[] = skeleton.map((c) => {
+        const r = etaMap.get(c.id);
+        const nextState: CardState = c.state === 'gray' ? 'gray' : 'default';
+        return {
+          ...c,
+          carMin: r?.eta_car_min ?? 0,
+          walkMin: r?.eta_walk_min ?? 0,
+          state: nextState,
+        };
+      });
+
+      // 정렬: Level → HLI desc → ETA_car asc
+      merged.sort((a, b) => {
+        const lv = levelOrder[a.level] - levelOrder[b.level];
+        if (lv !== 0) return lv;
+        if (b.hli !== a.hli) return b.hli - a.hli;
+        return (a.carMin || 1e9) - (b.carMin || 1e9);
+      });
+
+      const top3 = merged.slice(0, 3).map((c, i) => ({ ...c, rank: i + 1 }));
+      setCards(top3);
+      setSelectedId(top3[0]?.id ?? null);
+    })().catch(console.error);
+  }, [coords, radiusKm]);
+
+  // TopSubline prop 타입과 일치
+  const subline = useMemo<{
+    state: 'loading' | 'default';
+    radius: string;
+    count: string;
+  }>(() => ({
+    state: allHospitals.length === 0 ? 'loading' : 'default',
+    radius: String(radiusKm),
+    count: String(allHospitals.length || 0),
+  }), [allHospitals.length, radiusKm]);
+
+  const highlightedMarkerId = useMemo(() => (selectedId ? 'hospital-1' : null), [selectedId]);
+
+  return (
+    <>
+      <TopAppHeader />
+      <TopSubline state={subline.state} radiusKm={subline.radius} count={subline.count} />
+
+      <div className="pt-14 h-screen flex flex-col">
+        <div className="relative flex-1">
+          <MapView highlightedMarkerId={highlightedMarkerId} />
+        </div>
+
+        <BottomCardBar
+          hospitals={cards}
+          selectedHospitalId={selectedId}
+          onCardSelect={(id) => setSelectedId(id)}
+          onViewDetails={async (raw) => {
+            const card = normalizeCard(raw);
+            try {
+              const d = await Api.hospitalDetail(card.id);
+              const icu =
+                (d.hv2 || 0) +
+                (d.hv3 || 0) +
+                (d.hv4 || 0) +
+                (d.hv5 || 0) +
+                (d.hv6 || 0) +
+                (d.hvoc || 0);
+              setDetail({
+                open: true,
+                card: {
+                  ...card,
+                  erAvailable: d.hvec ?? 0,
+                  icuAvailTotal: icu,
+                  hv: { hv2: d.hv2, hv3: d.hv3, hv4: d.hv4, hv5: d.hv5, hv6: d.hv6, hvoc: d.hvoc },
+                },
+              });
+            } catch {
+              setDetail({ open: true, card });
+            }
+          }}
+          onStartNavigation={(raw) => {
+            const card = normalizeCard(raw);
+            setHandoff({ open: true, name: card.name });
+          }}
+        />
+      </div>
+
+      <DetailHalfSheet
+        isOpen={detail.open}
+        onClose={() => setDetail({ open: false })}
+        hospitalName={detail.card?.name || ''}
+        hli={detail.card?.hli || 0}
+        level={detail.card?.level || 'GRAY'}
+        minutesAgo={detail.card?.minutesAgo || 0}
+        freshness={detail.card?.freshness ?? undefined}
+        phone={detail.card?.phone || ''}
+        address={detail.card?.address || ''}
+        erAvailable={detail.card?.erAvailable || 0}
+        icuAvailTotal={detail.card?.icuAvailTotal || 0}
+        hvDetails={detail.card?.hv}
+        warnMessage={detail.card?.warnMessage}
+        onStartNavigation={() => {
+          setDetail({ open: false });
+          setHandoff({ open: true, name: detail.card?.name });
+        }}
+        onCall={() => {
+          if (detail.card?.phone) window.location.href = `tel:${detail.card.phone}`;
+        }}
+      />
+
+      <TmapHandoffScreen
+        isOpen={handoff.open}
+        hospitalName={handoff.name || ''}
+        onBack={() => setHandoff({ open: false })}
+        onConfirm={() => {
+          setHandoff({ open: false });
+          setOpened(true);
+        }}
+      />
+      <TmapOpenedOverlay isOpen={opened} onClose={() => setOpened(false)} />
+    </>
+  );
+}
