@@ -34,14 +34,14 @@ app:
     timeout_ms: 1500
 
   nmc:
-    timeout_ms: 1500
+    timeout_ms: 5000
     openapi:
       base: https://apis.data.go.kr/B552657/ErmctInfoInqireService
       endpoint: getEmrrmRltmUsefulSckbdInfoInqire
       service_key: ${NMC_SERVICE_KEY}
 
   mois:
-    timeout_ms: 2000
+    timeout_ms: 4000
     base_url: https://www.safetydata.go.kr
     endpoint_path: /v2/api/DSSF-IP-00247
     service_key: ${MOIS_SERVICE_KEY}

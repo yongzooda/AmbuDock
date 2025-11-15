@@ -30,7 +30,7 @@ public class TmapProxyService {
     @Value("${tmap.proxy.base-url}")
     private String tmapBaseUrl;
 
-    @Value("${tmap.proxy.timeout-ms:1500}")
+    @Value("${tmap.proxy.timeout-ms}")
     private int tmapTimeoutMs;
 
     /* ---------------- WebClient 재사용 ---------------- */

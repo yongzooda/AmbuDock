@@ -107,33 +107,36 @@ public class MoisClient {
         try {
             WebClient wc = newClient();
 
-            // 일부 공공 API는 URL-인코딩된 키를 거부할 수 있음 → 문제가 있으면 raw 키로 교체 시도.
-            String encodedKey = URLEncoder.encode(serviceKey, StandardCharsets.UTF_8);
+            String url = org.springframework.web.util.UriComponentsBuilder
+                    .fromHttpUrl(baseUrl)                   // ex) https://www.safetydata.go.kr
+                    .pathSegment(Arrays.stream(
+                            endpointPath.replaceFirst("^/","").split("/")
+                    ).toArray(String[]::new))               // ex) v2, api, DSSF-IP-00247
+                    .queryParam("serviceKey", serviceKey)   // ★ raw key
+                    .queryParam("returnType", "json")       // 신스펙 기준
+                    .queryParam("pageNo", Math.max(1, page))
+                    .queryParam("numOfRows", Math.max(1, rows))
+                    .queryParamIfPresent("crtDt", Optional.ofNullable(sinceYmd)
+                            .filter(org.apache.commons.lang3.StringUtils::isNotBlank))
+                    .queryParamIfPresent("rgnNm", Optional.ofNullable(regionName)
+                            .filter(org.apache.commons.lang3.StringUtils::isNotBlank))
+                    .encode(java.nio.charset.StandardCharsets.UTF_8) // 최종 한 번만
+                    .build()
+                    .toUriString();
 
-            WebClient.RequestHeadersSpec<?> spec = wc.get()
-                    .uri(builder -> {
-                        var ub = builder.path(endpointPath)
-                                .queryParam("serviceKey", encodedKey)
-                                .queryParam("returnType", "json")
-                                .queryParam("pageNo", Math.max(1, page))
-                                .queryParam("numOfRows", Math.max(1, rows));
-                        if (StringUtils.isNotBlank(sinceYmd)) {
-                            ub.queryParam("crtDt", sinceYmd);
-                        }
-                        if (StringUtils.isNotBlank(regionName)) {
-                            ub.queryParam("rgnNm", regionName);
-                        }
-                        return ub.build();
-                    })
-                    .accept(MediaType.APPLICATION_JSON);
+            // ★ 추가: 실제 호출 URL 확인용
+            log.debug("MOIS request URL={}", url);
 
-            JsonNode root = spec.retrieve()
+            JsonNode root = wc.get()
+                    .uri(url)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
                     .onStatus(HttpStatusCode::isError, res -> res.createException().flatMap(Mono::error))
                     .bodyToMono(String.class)
                     .timeout(Duration.ofMillis(Math.max(500, timeoutMs)))
                     .map(this::readTreeSafe)
                     .onErrorResume(ex -> {
-                        log.warn("MOIS fetch failed: {}{} cause={}", baseUrl, endpointPath, ex.toString());
+                        log.warn("MOIS fetch failed: {} cause={}", url, ex.toString());
                         return Mono.just(om.createObjectNode());
                     })
                     .block();
@@ -149,7 +152,7 @@ public class MoisClient {
                 if (dto != null) list.add(dto);
             }
 
-            // issuedAt 내림차순 정렬 (null은 맨 뒤로)
+            // issuedAt 내림차순 (null 뒤로)
             return list.stream()
                     .sorted(Comparator.comparing(
                             (MoisAlertDto d) -> Optional.ofNullable(d.getIssuedAt()).orElse(Instant.EPOCH)
@@ -161,6 +164,7 @@ public class MoisClient {
             return List.of();
         }
     }
+
 
     /* ======================================================================
      * 내부 유틸
