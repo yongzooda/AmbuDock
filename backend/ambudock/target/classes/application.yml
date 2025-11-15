@@ -3,7 +3,7 @@ server:
 
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/ambudock?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+    url: jdbc:mysql://localhost:3306/ambudock?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC
     username: root
     password: lyj@134137
   jpa:
@@ -20,17 +20,56 @@ spring:
   cache:
     type: caffeine
   jackson:
-    time-zone: Asia/Seoul
+    time-zone: UTC
 
 logging:
   level:
-    com.ambudock: debug
-
-caffeine:
-  specs:
-    hospitals: maximumSize=2000,expireAfterWrite=60s
-    disasters: maximumSize=2000,expireAfterWrite=300s
-    eta: maximumSize=10000,expireAfterWrite=120s
+    com.example.ambudock: debug
 
 app:
   default-radius-km: 15
+
+  kakao:
+    rest_api_key: ${KAKAO_REST_API_KEY}
+    timeout_ms: 1500
+
+  nmc:
+    timeout_ms: 5000
+    openapi:
+      base: https://apis.data.go.kr/B552657/ErmctInfoInqireService
+      endpoint: getEmrrmRltmUsefulSckbdInfoInqire
+      service_key: ${NMC_SERVICE_KEY}
+
+  mois:
+    timeout_ms: 4000
+    base_url: https://www.safetydata.go.kr
+    endpoint_path: /v2/api/DSSF-IP-00247
+    service_key: ${MOIS_SERVICE_KEY}
+    default_rows: 100
+    query-zone: Asia/Seoul
+
+tmap:
+  proxy:
+    base-url: https://apis.openapi.sk.com
+    timeout-ms: 1500
+  app-key: ${TMAP_APP_KEY}
+
+ambudock:
+  admin:
+    username: admin
+    password: admin1234
+
+# ---------------- Scheduler intervals (ms) ----------------
+scheduler:
+  nmc_fetch:
+    fixed_delay_ms: 60000     # NMC 실시간 상태 수집 주기
+    initial_delay_ms: 15000
+  hli_compute:
+    fixed_delay_ms: 60000     # HLI 계산 주기
+    initial_delay_ms: 30000
+  mois_sync:
+    fixed_delay_ms: 180000    # 재난문자 동기화 주기
+    initial_delay_ms: 10000
+  rank_refresh:
+    fixed_delay_ms: 60000     # 추천 랭킹 재계산 주기(필요 시)
+    initial_delay_ms: 0
