@@ -56,7 +56,7 @@ export function MarkerTooltip({
 
     let newPlacement: Placement = 'top';
     let finalX = position.x;
-    let finalY = position.y;
+    const finalY = position.y;
 
     // Check if tooltip fits above the marker
     if (position.y - tooltipHeight - offset < containerBounds.top) {

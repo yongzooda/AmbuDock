@@ -1,3 +1,5 @@
+// src/components/TopSubline.tsx
+
 import { Target, Info } from 'lucide-react';
 
 type TopSublineProps = {

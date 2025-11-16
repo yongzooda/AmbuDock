@@ -1,3 +1,5 @@
+// src/components/ui/resizable.tsx
+
 "use client";
 
 import * as React from "react";

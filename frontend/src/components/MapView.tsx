@@ -1,3 +1,5 @@
+// src/components/MapView.tsx
+
 import { useState } from 'react';
 import { Crosshair } from 'lucide-react';
 import { HospitalMarker } from './HospitalMarker';

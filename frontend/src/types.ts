@@ -1,4 +1,5 @@
 // src/types.ts
+
 export type HliLevel = 'GREEN' | 'YELLOW' | 'RED' | 'GRAY';
 export type StaleLevel = 'FRESH' | 'SOFT' | 'HARD';
 export type Severity = 'IGNORE' | 'WARN' | 'BLOCK';

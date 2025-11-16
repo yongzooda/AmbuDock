@@ -1,4 +1,5 @@
 // src/hooks/useGeolocation.ts
+
 import * as React from 'react';
 
 export function useGeolocation() {

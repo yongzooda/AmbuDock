@@ -1,3 +1,5 @@
+// src/components/BottomCardBar.tsx
+
 import { HospitalCard } from './HospitalCard';
 
 type Hospital = {

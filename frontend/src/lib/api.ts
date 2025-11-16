@@ -1,4 +1,5 @@
 // src/lib/api.ts
+
 import type {
   NearbyResponse, DisasterEvaluateResponse, TmapRouteResponse,
   TmapCandidate, HospitalDetail

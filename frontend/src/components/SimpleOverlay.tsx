@@ -1,3 +1,5 @@
+// src/components/SimpleOverlay.tsx
+
 type SimpleOverlayProps = {
   isOpen: boolean;
   onClose: () => void;

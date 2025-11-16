@@ -1,3 +1,5 @@
+// src/components/DetailHalfSheet.tsx
+
 import { X, Phone } from 'lucide-react';
 
 type Level = 'GREEN' | 'YELLOW' | 'RED' | 'GRAY';
