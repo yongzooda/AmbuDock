@@ -80,3 +80,8 @@ __MACOSX/
 
 # env
 .env
+
+# Maven / Gradle build outputs (모든 서브모듈 공통)
+**/target/
+**/build/
+*.class
