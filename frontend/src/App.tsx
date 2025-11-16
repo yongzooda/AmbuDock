@@ -8,6 +8,7 @@ import { BottomCardBar } from './components/BottomCardBar';
 import { DetailHalfSheet } from './components/DetailHalfSheet';
 import { TmapHandoffScreen } from './components/TmapHandoffScreen';
 import { TmapOpenedOverlay } from './components/TmapOpenedOverlay';
+import { SimpleOverlay } from './components/SimpleOverlay';
 
 import { Api } from './lib/api';
 import type {
@@ -38,7 +39,14 @@ type CardModel = {
   address: string;
   erAvailable: number;
   icuAvailTotal: number;
-  hv?: Partial<{ hv2: number; hv3: number; hv4: number; hv5: number; hv6: number; hvoc: number }>;
+  hv?: Partial<{
+    hv2: number;
+    hv3: number;
+    hv4: number;
+    hv5: number;
+    hv6: number;
+    hvoc: number;
+  }>;
 };
 
 const DEFAULT_RADIUS_KM = 15;
@@ -80,9 +88,7 @@ function normalizeCard(c: unknown): CardModel {
     walkMin: 0,
     carMin: 0,
     distanceKm: Number(
-      typeof h?.distanceKm === 'number'
-        ? Number(h.distanceKm.toFixed(1))
-        : 0
+      typeof h?.distanceKm === 'number' ? Number(h.distanceKm.toFixed(1)) : 0,
     ),
     state: (h?.hli?.level === 'GRAY' ? 'gray' : 'eta-pending') as CardState,
     warnMessage: undefined,
@@ -100,16 +106,22 @@ function normalizeCard(c: unknown): CardModel {
 }
 
 export default function App() {
-  const { coords } = useGeolocation();
+  const { coords, error: geoError } = useGeolocation();
   const [radiusKm] = useState(DEFAULT_RADIUS_KM);
 
   const [allHospitals, setAllHospitals] = useState<HospitalListItem[]>([]);
+  const [hasLoadedHospitals, setHasLoadedHospitals] = useState(false);
   const [cards, setCards] = useState<CardModel[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const [detail, setDetail] = useState<{ open: boolean; card?: CardModel }>({ open: false });
-  const [handoff, setHandoff] = useState<{ open: boolean; name?: string }>({ open: false });
+  const [detail, setDetail] = useState<{ open: boolean; card?: CardModel }>({
+    open: false,
+  });
+  const [handoff, setHandoff] = useState<{ open: boolean; name?: string }>({
+    open: false,
+  });
   const [opened, setOpened] = useState(false);
+  const [geoOverlayClosed, setGeoOverlayClosed] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -118,14 +130,33 @@ export default function App() {
       const center = `${coords.lat},${coords.lon}`;
       const nearby = await Api.listNearby(center, radiusKm);
       setAllHospitals(nearby.items);
+      setHasLoadedHospitals(true);
 
       const hpids = nearby.items.map((h) => h.hpid);
+      if (hpids.length === 0) {
+        setCards([]);
+        setSelectedId(null);
+        return;
+      }
+
       const dis = await Api.evalDisasters(hpids);
       const warnMap = new Map(dis.results.map((r) => [r.hpid, r]));
 
       // BLOCK 제외
-      const filtered = nearby.items.filter((h) => !(warnMap.get(h.hpid)?.blocked));
-      const k = filtered.slice(0, Math.min(10, Math.max(5, filtered.length)));
+      const filtered = nearby.items.filter(
+        (h) => !warnMap.get(h.hpid)?.blocked,
+      );
+      const k = filtered.slice(
+        0,
+        Math.min(10, Math.max(5, filtered.length)),
+      );
+
+      // 후보가 없으면 종료
+      if (k.length === 0) {
+        setCards([]);
+        setSelectedId(null);
+        return;
+      }
 
       // ETA 대기 스켈레톤
       const skeleton: CardModel[] = k.map((h, i) => ({
@@ -155,7 +186,11 @@ export default function App() {
       setCards(skeleton);
 
       // TMAP ETA 병합
-      const candidates: TmapCandidate[] = k.map((h) => ({ hpid: h.hpid, lat: h.lat, lon: h.lon }));
+      const candidates: TmapCandidate[] = k.map((h) => ({
+        hpid: h.hpid,
+        lat: h.lat,
+        lon: h.lon,
+      }));
       const route = await Api.tmapRoute(center, candidates);
 
       const etaMap = new Map(route.items.map((r) => [r.hpid, r]));
@@ -186,21 +221,43 @@ export default function App() {
 
   // TopSubline prop 타입과 일치
   const subline = useMemo<{
-    state: 'loading' | 'default';
+    state: 'loading' | 'default' | 'empty';
     radius: string;
     count: string;
-  }>(() => ({
-    state: allHospitals.length === 0 ? 'loading' : 'default',
-    radius: String(radiusKm),
-    count: String(allHospitals.length || 0),
-  }), [allHospitals.length, radiusKm]);
+  }>(() => {
+    let state: 'loading' | 'default' | 'empty';
 
-  const highlightedMarkerId = useMemo(() => (selectedId ? 'hospital-1' : null), [selectedId]);
+    if (!coords || !hasLoadedHospitals) {
+      state = 'loading';
+    } else if (allHospitals.length === 0) {
+      state = 'empty';
+    } else {
+      state = 'default';
+    }
+
+    return {
+      state,
+      radius: String(radiusKm),
+      count: String(allHospitals.length || 0),
+    };
+  }, [coords, hasLoadedHospitals, allHospitals.length, radiusKm]);
+
+  // 현재는 Top1 후보를 항상 'hospital-1' 마커와 연결
+  const highlightedMarkerId = useMemo(
+    () => (cards[0] ? 'hospital-1' : null),
+    [cards],
+  );
+
+  const isGeoOverlayOpen = !!geoError && !geoOverlayClosed;
 
   return (
     <>
       <TopAppHeader />
-      <TopSubline state={subline.state} radiusKm={subline.radius} count={subline.count} />
+      <TopSubline
+        state={subline.state}
+        radiusKm={subline.radius}
+        count={subline.count}
+      />
 
       <div className="pt-14 h-screen flex flex-col">
         <div className="relative flex-1">
@@ -228,7 +285,14 @@ export default function App() {
                   ...card,
                   erAvailable: d.hvec ?? 0,
                   icuAvailTotal: icu,
-                  hv: { hv2: d.hv2, hv3: d.hv3, hv4: d.hv4, hv5: d.hv5, hv6: d.hv6, hvoc: d.hvoc },
+                  hv: {
+                    hv2: d.hv2,
+                    hv3: d.hv3,
+                    hv4: d.hv4,
+                    hv5: d.hv5,
+                    hv6: d.hv6,
+                    hvoc: d.hvoc,
+                  },
                 },
               });
             } catch {
@@ -261,7 +325,9 @@ export default function App() {
           setHandoff({ open: true, name: detail.card?.name });
         }}
         onCall={() => {
-          if (detail.card?.phone) window.location.href = `tel:${detail.card.phone}`;
+          if (detail.card?.phone) {
+            window.location.href = `tel:${detail.card.phone}`;
+          }
         }}
       />
 
@@ -275,6 +341,23 @@ export default function App() {
         }}
       />
       <TmapOpenedOverlay isOpen={opened} onClose={() => setOpened(false)} />
+
+      <SimpleOverlay
+        isOpen={isGeoOverlayOpen}
+        onClose={() => setGeoOverlayClosed(true)}
+        title={
+          geoError === 'DENIED'
+            ? '위치 권한이 필요합니다'
+            : '현재 위치를 가져올 수 없어요'
+        }
+        message={
+          geoError === 'DENIED'
+            ? '주변 응급실을 추천하려면 브라우저 위치 권한을 허용해 주세요.'
+            : geoError === 'GEO_UNSUPPORTED'
+            ? '이 브라우저에서는 위치 정보를 지원하지 않아, 예시 화면으로만 확인할 수 있어요.'
+            : '위치 정보를 불러오는 중 문제가 발생했어요. 잠시 후 다시 시도해 주세요.'
+        }
+      />
     </>
   );
 }
