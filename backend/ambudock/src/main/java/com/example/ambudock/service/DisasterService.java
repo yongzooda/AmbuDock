@@ -384,8 +384,8 @@ public class DisasterService {
      *  1) 정규식 룰 우선: enabled=true, priority ASC 순으로 매칭.
      *     - IGNORE가 하나라도 매칭되면 즉시 IGNORE 반환(해제/종료는 무조건 무력화).
      *     - BLOCK/WARN은 누적 후 BLOCK 우선.
-     *  2) 보조 힌트: 단계명/재난유형/본문 텍스트를 소문자 결합하여
-     *     해제/대피/통제/주의/기상 키워드로 보정(룰에 안 걸린 잔여 케이스 보완).
+     *  2) 보조 힌트: 단계명/재난유형/본문 텍스트를 결합하여
+     *     해제/대피/통제/주의/기상/수도·도로 키워드로 보정.
      *  3) 아무 단서가 없으면 보수적으로 IGNORE.
      */
     private Severity decideSeverity(RuleSet rules, String msg, String emrgStepName, String hazardName) {
@@ -413,23 +413,56 @@ public class DisasterService {
 
         // -----------------------------
         // 2) 보조 힌트 기반 판정
-        //    - 룰로 결론이 안 났을 때 단계명/재난유형/본문을 합쳐 소문자 비교
+        //    - 룰로 결론이 안 났을 때 단계명/재난유형/본문을 합쳐 비교
         // -----------------------------
         String all = (StringUtils.defaultString(emrgStepName, "") + " "
                 + StringUtils.defaultString(hazardName, "") + " " + text).toLowerCase();
 
-        // '해제/종료/정상화'가 포함되면 무조건 IGNORE (최우선 무효화)
-        if (all.contains("해제") || all.contains("종료") || all.contains("정상화"))
+        // 2-1. '해제/종료/정상화/훈련/테스트' 계열은 무조건 IGNORE
+        if (containsAny(all, "해제", "종료", "정상화", "훈련", "모의훈련", "훈련문자", "테스트", "시험 발송", "점검 문자")) {
             return Severity.IGNORE;
+        }
 
-        // 대피/전면 통제/출입 통제 등 즉각적 위험 신호는 BLOCK
-        if (all.contains("대피") || all.contains("전면 통제") || all.contains("전면통제") || all.contains("출입 통제"))
+        // 2-2. 대피·즉각 위험 신호 → BLOCK
+        if (containsAny(all, "즉시 대피", "긴급 대피", "대피 하시기 바랍니다", "대피하십시오", "대피하세요", "피난하십시오")) {
             return Severity.BLOCK;
+        }
 
-        // 주의/주의보/기상 경보(호우/강풍/폭염/폭설/태풍 등)는 WARN
-        if (all.contains("주의") || all.contains("주의보") || all.contains("호우") || all.contains("강풍")
-                || all.contains("폭염") || all.contains("폭설") || all.contains("태풍"))
+        // 2-3. 도로/차량 통제 보정
+        //      - '전면/전구간/전차로' + 도로/차량 통제 → BLOCK
+        //      - 그 외 '도로 통제/차량 통제/교통 통제' → WARN
+        boolean hasControl = all.contains("통제");
+        boolean hasRoad = containsAny(all, "도로", "고속도로", "강변로", "강변도로", "교량", "터널");
+        if (hasRoad && hasControl) {
+            if (containsAny(all, "전면 통제", "전면통제", "전 구간", "전구간", "전차로", "양방향")) {
+                return Severity.BLOCK;
+            }
+            // 부분/일부 통제는 이미 WARN 정규식에 있을 수 있지만,
+            // 룰에 안 걸린 '도로 통제' 일반 케이스는 WARN으로 본다.
             return Severity.WARN;
+        }
+
+        // 2-4. 상수도/급수/수압/물공급 보정
+        //      - 단수/공급 중단/급수 중단 → WARN
+        //      - 수압 저하/유량 저하/물공급 원활X → WARN
+        boolean hasWaterInfra = containsAny(all, "상수도", "수돗물", "수도", "급수", "수압", "물공급", "상수 공급");
+        if (hasWaterInfra) {
+            if (containsAny(all, "단수", "급수 중단", "급수중단", "공급 중단", "공급이 중단")) {
+                return Severity.WARN;
+            }
+            if (containsAny(all, "수압 저하", "유량 저하", "물공급이 원활하지", "물 공급이 원활하지", "수압이 낮아")) {
+                return Severity.WARN;
+            }
+        }
+
+        // 2-5. 일반 기상/주의 계열 보정 (룰에 안 걸렸을 때용 세이프티넷)
+        if (containsAny(all,
+                "주의보", "경보", "호우", "폭우", "강풍", "태풍", "풍랑",
+                "대설", "폭설", "한파", "폭염", "건조",
+                "황사", "미세먼지", "낙뢰", "우박",
+                "산불 주의", "산사태 주의")) {
+            return Severity.WARN;
+        }
 
         // -----------------------------
         // 3) 명시적 단서가 없으면 보수적으로 IGNORE
@@ -675,6 +708,17 @@ public class DisasterService {
         }
         return out;
     }
+
+    private static boolean containsAny(String haystack, String... needles) {
+        if (haystack == null || haystack.isEmpty()) return false;
+        for (String n : needles) {
+            if (n != null && !n.isEmpty() && haystack.contains(n)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 
     // ===== 결과 요약 DTO =====
     @Getter
