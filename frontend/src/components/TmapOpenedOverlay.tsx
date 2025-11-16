@@ -1,3 +1,5 @@
+// src/components/TmapOpenedOverlay.tsx
+
 import { Check } from 'lucide-react';
 
 type TmapOpenedOverlayProps = {

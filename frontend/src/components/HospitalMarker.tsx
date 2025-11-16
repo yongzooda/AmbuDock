@@ -1,3 +1,5 @@
+// src/components/HospitalMarker.tsx
+
 import { Clock } from 'lucide-react';
 
 type MarkerLevel = 'GREEN' | 'YELLOW' | 'RED' | 'GRAY';

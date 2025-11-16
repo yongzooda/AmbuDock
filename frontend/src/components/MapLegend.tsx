@@ -1,3 +1,5 @@
+// src/components/MapLegend.tsx
+
 export function MapLegend() {
   const legendItems = [
     { color: '#10B981', label: 'GREEN: 여유', shape: 'circle' as const },

@@ -1,3 +1,5 @@
+// src/components/MarkerHighlight.tsx
+
 export function MarkerHighlight({ style }: { style?: React.CSSProperties }) {
   return (
     <div className="absolute" style={style}>

@@ -1,4 +1,5 @@
-// Toggle.tsx (컴포넌트만 export)
+// src/components/ui/toggle.tsx
+
 "use client";
 
 import * as React from "react";

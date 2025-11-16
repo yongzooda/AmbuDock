@@ -1,3 +1,5 @@
+// src/components/TopAppHeader.tsx
+
 import { Crosshair } from 'lucide-react';
 
 export function TopAppHeader() {

@@ -1,3 +1,5 @@
+// src/components/ui/input-otp.tsx
+
 import * as React from "react";
 
 import { cn } from "./utils";

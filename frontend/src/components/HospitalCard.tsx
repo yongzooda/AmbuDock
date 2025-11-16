@@ -1,3 +1,5 @@
+// src/components/HospitalCard.tsx
+
 type CardState = 'default' | 'loading' | 'eta-pending' | 'warn' | 'gray';
 type Level = 'GREEN' | 'YELLOW' | 'RED' | 'GRAY';
 type DataFreshness = 'FRESH' | 'SOFT' | null;
