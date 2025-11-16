@@ -35,14 +35,6 @@ import java.util.stream.Collectors;
  *  - 심각도 판정(Severity), TTL 계산, 지역 매핑은 DisasterIngestService가 수행한다.
  *  - 여기서는 원문에서 얻을 수 있는 필수 필드(md101Sn, issuedAt, locationName, msg 등)와
  *    판정에 도움이 되는 '힌트 필드'(emrgStepName, hazardName)까지만 세팅한다.
- *
- * 기대 설정값(application.yml):
- *   app.mois.base_url:       "https://www.safetydata.go.kr" (예시)
- *   app.mois.endpoint_path:  "/v2/api/DSSF-IP-00247"
- *   app.mois.service_key:    "<발급받은키>"
- *   app.mois.timeout_ms:     1500
- *   app.mois.default_rows:   50
- *   app.mois.query-zone:     "Asia/Seoul"
  */
 @Service
 @RequiredArgsConstructor
@@ -107,25 +99,35 @@ public class MoisClient {
         try {
             WebClient wc = newClient();
 
-            String url = org.springframework.web.util.UriComponentsBuilder
-                    .fromHttpUrl(baseUrl)                   // ex) https://www.safetydata.go.kr
-                    .pathSegment(Arrays.stream(
-                            endpointPath.replaceFirst("^/","").split("/")
-                    ).toArray(String[]::new))               // ex) v2, api, DSSF-IP-00247
-                    .queryParam("serviceKey", serviceKey)   // ★ raw key
-                    .queryParam("returnType", "json")       // 신스펙 기준
+            // baseUrl + endpointPath를 합치고, serviceKey는 나중에 수동으로 붙인다.
+            String normalizedBase = baseUrl.endsWith("/")
+                    ? baseUrl.substring(0, baseUrl.length() - 1)
+                    : baseUrl;
+            String normalizedPath = endpointPath.startsWith("/")
+                    ? endpointPath
+                    : "/" + endpointPath;
+
+            // 1) serviceKey를 제외한 나머지 파라미터를 UriComponentsBuilder로 구성
+            String urlWithoutKey = org.springframework.web.util.UriComponentsBuilder
+                    .fromHttpUrl(normalizedBase + normalizedPath)
+                    .queryParam("returnType", "json")
                     .queryParam("pageNo", Math.max(1, page))
                     .queryParam("numOfRows", Math.max(1, rows))
                     .queryParamIfPresent("crtDt", Optional.ofNullable(sinceYmd)
                             .filter(org.apache.commons.lang3.StringUtils::isNotBlank))
                     .queryParamIfPresent("rgnNm", Optional.ofNullable(regionName)
                             .filter(org.apache.commons.lang3.StringUtils::isNotBlank))
-                    .encode(java.nio.charset.StandardCharsets.UTF_8) // 최종 한 번만
+                    // ★ 여기서는 .encode(...) 호출 안 함
                     .build()
                     .toUriString();
 
-            // ★ 추가: 실제 호출 URL 확인용
+            // 2) serviceKey는 포털에서 받은 그대로(이미 인코딩 되어 있을 수 있으므로) 수동으로 붙임
+            String sep = urlWithoutKey.contains("?") ? "&" : "?";
+            String url = urlWithoutKey + sep + "serviceKey=" + serviceKey;
+
+            // 실제 호출 URL 로그
             log.debug("MOIS request URL={}", url);
+
 
             JsonNode root = wc.get()
                     .uri(url)
