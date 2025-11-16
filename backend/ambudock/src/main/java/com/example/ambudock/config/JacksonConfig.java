@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,5 +31,19 @@ public class JacksonConfig {
         mapper.setTimeZone(TimeZone.getTimeZone("UTC"));
 
         return mapper;
+    }
+
+    @Bean
+    public XmlMapper xmlMapper() {
+        XmlMapper xmlMapper = XmlMapper.builder()
+                .findAndAddModules()
+                .build();
+
+        // JSON과 설정을 최대한 맞춰줌
+        xmlMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        xmlMapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        xmlMapper.setTimeZone(TimeZone.getTimeZone("UTC"));
+
+        return xmlMapper;
     }
 }
