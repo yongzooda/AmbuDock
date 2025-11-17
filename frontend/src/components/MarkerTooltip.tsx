@@ -18,7 +18,12 @@ type MarkerTooltipProps = {
   warnMessage?: string;
   variant?: TooltipVariant;
   position: { x: number; y: number };
-  containerBounds?: { top: number; left: number; right: number; bottom: number };
+  containerBounds?: {
+    top: number;
+    left: number;
+    right: number;
+    bottom: number;
+  };
 };
 
 const levelStyles = {
@@ -39,12 +44,12 @@ export function MarkerTooltip({
   warnMessage,
   variant = 'default',
   position,
-  containerBounds = { top: 80, left: 16, right: 374, bottom: 490 },
+  containerBounds,
 }: MarkerTooltipProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<Placement>('top');
   const [adjustedPosition, setAdjustedPosition] = useState(position);
-  
+
   const levelStyle = levelStyles[level];
   const isGray = variant === 'gray';
   const showWarn = variant === 'warn' && warnMessage;
@@ -53,15 +58,27 @@ export function MarkerTooltip({
     if (!tooltipRef.current) return;
 
     const tooltipRect = tooltipRef.current.getBoundingClientRect();
-    const tooltipWidth = tooltipRect.width;
-    const tooltipHeight = tooltipRect.height;
+    const tooltipWidth = tooltipRect.width || 0;
+    const tooltipHeight = tooltipRect.height || 0;
     const offset = 14;
+
+    // ✅ containerBounds 가 아직 없거나 값이 이상하면
+    //    위치 보정하지 않고 그대로 사용
+    if (
+      !containerBounds ||
+      containerBounds.right <= containerBounds.left ||
+      containerBounds.bottom <= containerBounds.top
+    ) {
+      setPlacement('top');
+      setAdjustedPosition(position);
+      return;
+    }
 
     let newPlacement: Placement = 'top';
     let finalX = position.x;
     const finalY = position.y;
 
-    // 위쪽으로 공간이 부족하면 아래로 배치
+    // 위쪽 공간 부족하면 아래에 배치
     if (position.y - tooltipHeight - offset < containerBounds.top) {
       newPlacement = 'bottom';
     }
@@ -131,9 +148,11 @@ export function MarkerTooltip({
           maxWidth: '260px',
         }}
         role="tooltip"
-        aria-label={
-          `${hospitalName}${showWarn ? `, 경보: WARN ${warnMessage}` : ''}, HLI ${hli}점 ${level}, ${minutesAgo}분 전${hvecCount !== undefined ? `, 가용 응급실 병상수 ${hvecCount}개` : ''}`
-        }
+        aria-label={`${hospitalName}${
+          showWarn ? `, 경보: WARN ${warnMessage}` : ''
+        }, HLI ${hli}점 ${level}, ${minutesAgo}분 전${
+          hvecCount !== undefined ? `, 가용 응급실 병상수 ${hvecCount}개` : ''
+        }`}
       >
         {/* 병원 이름 + 레벨 아이콘 */}
         <div className="mb-2 flex items-center gap-2">
@@ -159,21 +178,35 @@ export function MarkerTooltip({
               border: '1px solid #FED7AA',
             }}
           >
-            <AlertTriangle className="w-3.5 h-3.5" style={{ strokeWidth: 2.5 }} />
+            <AlertTriangle
+              className="w-3.5 h-3.5"
+              style={{ strokeWidth: 2.5 }}
+            />
             <span>WARN: {warnMessage}</span>
           </div>
         )}
 
         {/* 전화번호 */}
         {phone && (
-          <div className="mb-1" style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280' }}>
+          <div
+            className="mb-1"
+            style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280' }}
+          >
             전화 {phone}
           </div>
         )}
 
         {/* 주소 */}
         {address && (
-          <div className="mb-2" style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280', wordWrap: 'break-word' }}>
+          <div
+            className="mb-2"
+            style={{
+              fontSize: '14px',
+              fontWeight: 500,
+              color: '#6B7280',
+              wordWrap: 'break-word',
+            }}
+          >
             주소 {address}
           </div>
         )}
@@ -184,13 +217,15 @@ export function MarkerTooltip({
           <span> · </span>
           <span style={{ color: levelStyle.color }}>{level}</span>
           <span> · </span>
-          <span style={{ color: isGray ? '#9CA3AF' : 'inherit' }}>{minutesAgo}분 전</span>
+          <span style={{ color: isGray ? '#9CA3AF' : 'inherit' }}>
+            {minutesAgo}분 전
+          </span>
         </div>
 
         {/* ER 가용 수 */}
         {hvecCount !== undefined && (
-          <div 
-            className="mb-1" 
+          <div
+            className="mb-1"
             style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280' }}
             aria-label={`가용 응급실 병상수 ${hvecCount}개`}
           >

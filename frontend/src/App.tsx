@@ -54,7 +54,7 @@ const DEFAULT_RADIUS_KM = 15;
 /** 두 좌표 사이의 거리를 미터 단위로 계산 (하버사인) */
 function distanceMeters(
   a: { lat: number; lon: number },
-  b: { lat: number; lon: number },
+  b: { lat: number; lon: number }
 ): number {
   const R = 6371000; // m
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
@@ -66,8 +66,7 @@ function distanceMeters(
   const sinDLon = Math.sin(dLon / 2);
 
   const harv =
-    sinDLat * sinDLat +
-    Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
+    sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
 
   return 2 * R * Math.asin(Math.sqrt(harv));
 }
@@ -109,7 +108,7 @@ function normalizeCard(c: unknown): CardModel {
     walkMin: 0,
     carMin: 0,
     distanceKm: Number(
-      typeof h?.distanceKm === 'number' ? Number(h.distanceKm.toFixed(1)) : 0,
+      typeof h?.distanceKm === 'number' ? Number(h.distanceKm.toFixed(1)) : 0
     ),
     state: (h?.hli?.level === 'GRAY' ? 'gray' : 'eta-pending') as CardState,
     warnMessage: undefined,
@@ -159,7 +158,7 @@ export default function App() {
           console.debug(
             '[App] origin moved',
             moved.toFixed(1),
-            'm (< 100m). Skip nearby + TMAP recompute.',
+            'm (< 100m). Skip nearby + TMAP recompute.'
           );
           return;
         }
@@ -183,12 +182,9 @@ export default function App() {
 
       // BLOCK 제외
       const filtered = nearby.items.filter(
-        (h) => !warnMap.get(h.hpid)?.blocked,
+        (h) => !warnMap.get(h.hpid)?.blocked
       );
-      const k = filtered.slice(
-        0,
-        Math.min(10, Math.max(5, filtered.length)),
-      );
+      const k = filtered.slice(0, Math.min(10, Math.max(5, filtered.length)));
 
       // 후보가 없으면 종료
       if (k.length === 0) {

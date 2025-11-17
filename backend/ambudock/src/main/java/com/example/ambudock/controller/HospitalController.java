@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -72,8 +73,10 @@ public class HospitalController {
         Hospital h = oh.get();
 
         // 최신 HospitalStatus 조회 (페이지 1)
-        HospitalStatus latest = statusRepo.findLatestByHpid(h.getHpid(), org.springframework.data.domain.PageRequest.of(0, 1))
-                .stream().findFirst().orElse(null);
+        HospitalStatus latest = statusRepo.findLatestByHpid(
+                h.getHpid(),
+                org.springframework.data.domain.PageRequest.of(0, 1)
+        ).stream().findFirst().orElse(null);
 
         // HLI: 우선 스냅샷, 없으면 즉석 계산(compute), 없으면 null
         HliSummary hliSummary = null;
@@ -125,35 +128,34 @@ public class HospitalController {
                 ? eval.getResults().get(0) : null;
 
         String severity = (item == null) ? null : item.getSeverity();
-        boolean blocked = (item == null) ? false : item.isBlocked();
+        boolean blocked = (item != null && item.isBlocked());
         List<String> badges = (item == null || item.getBadges() == null) ? List.of() : item.getBadges();
 
-        // 최종 응답 body: Map.ofEntries로 다수 엔트리 안전 처리
-        Map<String, Object> body = Map.ofEntries(
-                Map.entry("hpid", h.getHpid()),
-                Map.entry("name", h.getName()),
-                Map.entry("lat", h.getLat()),
-                Map.entry("lon", h.getLon()),
-                Map.entry("tel_emergency", h.getTelEmergency()),
-                Map.entry("addr_road", h.getAddrRoad()),
+        // ✅ 최종 응답 body: null 허용 Map 사용 (Map.ofEntries는 value null 불가라 NPE 발생)
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("hpid", h.getHpid());
+        body.put("name", h.getName());
+        body.put("lat", h.getLat());
+        body.put("lon", h.getLon());
+        body.put("tel_emergency", h.getTelEmergency());
+        body.put("addr_road", h.getAddrRoad());
 
-                // 최신 지표 (없으면 null)
-                Map.entry("hvec", hvec),
-                Map.entry("hv2", hv2),
-                Map.entry("hv3", hv3),
-                Map.entry("hv4", hv4),
-                Map.entry("hv5", hv5),
-                Map.entry("hv6", hv6),
-                Map.entry("hvoc", hvoc),
+        // 최신 지표 (없으면 null 그대로 내려감)
+        body.put("hvec", hvec);
+        body.put("hv2", hv2);
+        body.put("hv3", hv3);
+        body.put("hv4", hv4);
+        body.put("hv5", hv5);
+        body.put("hv6", hv6);
+        body.put("hvoc", hvoc);
 
-                // HLI 요약 (없으면 null)
-                Map.entry("hli", hliSummary),
+        // HLI 요약 (없으면 null)
+        body.put("hli", hliSummary);
 
-                // 재난 관련
-                Map.entry("severity", severity),
-                Map.entry("blocked", blocked),
-                Map.entry("badges", badges)
-        );
+        // 재난 관련
+        body.put("severity", severity);
+        body.put("blocked", blocked);
+        body.put("badges", badges);
 
         return ResponseEntity.ok(body);
     }
