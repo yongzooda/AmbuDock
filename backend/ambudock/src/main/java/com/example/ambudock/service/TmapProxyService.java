@@ -2,7 +2,6 @@ package com.example.ambudock.service;
 
 import com.example.ambudock.dto.tmap.TmapDtos;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,23 +9,20 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * TMAP OpenAPI 호출/정규화 서비스
  *
- * - 후보 병원 K(≤10)에 대해 TMAP OpenAPI를 직접 호출하여
- *   · 차량 ETA/경로거리 (/tmap/routes)
- *   · 도보 ETA/경로거리 (/tmap/routes/pedestrian)
- *   · 직선 거리 (/tmap/routes/distance)
- *   를 계산한 뒤, 내부 표준 DTO(TmapDtos.RouteResponse)로 변환한다.
- *
- * - 실패(타임아웃/오류/빈 응답) 시, 하버사인 기반 추정치(source="ESTIMATE")로 폴백
+ * - 후보 병원 K(≤10)에 대해 TMAP OpenAPI 를 직접 호출해서
+ *   차량/도보 ETA, 경로거리(route_*_km), 직선거리(distance_line_km)를 계산
+ * - 실패(타임아웃/오류/400 등) 시, 직선거리 기반 추정치(source="ESTIMATE")로 대체
  * - 결과는 @Cacheable("eta")로 120초 캐시 (TTL은 CacheConfig에서 설정)
  */
 @Slf4j
@@ -43,8 +39,6 @@ public class TmapProxyService {
     @Value("${tmap.app-key}")
     private String tmapAppKey;
 
-    private final ObjectMapper objectMapper;
-
     /* ---------------- WebClient 재사용 ---------------- */
 
     /** 마지막 사용한 baseUrl */
@@ -53,7 +47,7 @@ public class TmapProxyService {
     private volatile WebClient cachedClient = null;
 
     /**
-     * baseUrl을 읽어 WebClient를 제공.
+     * baseUrl + appKey 로 WebClient를 제공.
      * - 동일 URL이면 재사용, 바뀌면 재생성
      */
     private WebClient client() {
@@ -64,8 +58,10 @@ public class TmapProxyService {
         }
         synchronized (this) {
             if (cachedClient == null || !baseUrl.equals(lastBaseUrl)) {
+                String key = tmapAppKey == null ? "" : tmapAppKey.trim();
                 cachedClient = WebClient.builder()
                         .baseUrl(baseUrl)
+                        .defaultHeader("appKey", key)
                         .build();
                 lastBaseUrl = baseUrl;
                 log.info("TMAP WebClient reinitialized. baseUrl={}", baseUrl);
@@ -79,8 +75,7 @@ public class TmapProxyService {
     /**
      * 후보 K 병원에 대한 차량/도보 ETA와 거리 요청
      * - 캐시 키: origin + candidates + 옵션(car/walk)을 문자열로 묶어 MD5 (동일 입력 120s 재사용)
-     * - 후보별로 TMAP OpenAPI를 직접 호출해서 Result를 만들고,
-     *   모든 후보가 실패하면 전체 ESTIMATE 폴백을 사용.
+     * - TMAP OpenAPI 정상 응답이면 source="TMAP", 모두 실패하면 ESTIMATE 폴백
      */
     @Cacheable(
             cacheNames = "eta",
@@ -91,290 +86,260 @@ public class TmapProxyService {
                     ").bytes)"
     )
     public TmapDtos.RouteResponse routeForCandidates(TmapDtos.RouteRequest req, String clientIp) {
-        // 1) 기본 방어
+        // 1) 입력 형식 방어: origin은 "lat,lon" 형태여야 함
         if (req == null || req.getOrigin() == null || req.getOrigin().indexOf(',') < 0) {
             throw new IllegalArgumentException("origin format must be 'lat,lon'");
         }
 
-        if (req.getCandidates() == null || req.getCandidates().isEmpty()) {
-            return TmapDtos.RouteResponse.builder()
-                    .items(List.of())
-                    .durationMs(0L)
-                    .source("ESTIMATE")
-                    .cached(0)
-                    .build();
-        }
-
         int timeoutMs = Math.max(500, tmapTimeoutMs);
+
+        // "lat,lon" 파싱
         double[] origin = parseLatLon(req.getOrigin());
         double oLat = origin[0];
         double oLon = origin[1];
 
-        long startNano = System.nanoTime();
+        boolean wantCar = req.getOptions() == null || Boolean.TRUE.equals(req.getOptions().isCar());
+        boolean wantWalk = req.getOptions() == null || Boolean.TRUE.equals(req.getOptions().isWalk());
+
+        long startNanos = System.nanoTime();
         List<TmapDtos.Result> items = new ArrayList<>();
-        boolean anyTmapSuccess = false;
 
-        try {
+        if (req.getCandidates() != null) {
             for (TmapDtos.RouteRequest.Candidate cand : req.getCandidates()) {
-                try {
-                    double dLat = getDouble(cand.getLat());
-                    double dLon = getDouble(cand.getLon());
+                double dLat = getDouble(cand.getLat());
+                double dLon = getDouble(cand.getLon());
 
-                    // 직선거리: /tmap/routes/distance 우선, 실패시 하버사인
-                    Double lineKm = callDistanceApi(oLon, oLat, dLon, dLat, timeoutMs);
-                    if (lineKm == null) {
-                        lineKm = haversineKm(oLat, oLon, dLat, dLon);
-                    }
+                Double etaCarMin = null;
+                Double etaWalkMin = null;
+                Double routeCarKm = null;
+                Double routeWalkKm = null;
+                Double lineKm = null;
 
-                    boolean wantCar = (req.getOptions() == null) || Boolean.TRUE.equals(req.getOptions().isCar());
-                    boolean wantWalk = (req.getOptions() == null) || Boolean.TRUE.equals(req.getOptions().isWalk());
-
-                    Double etaCarMin = null;
-                    Double routeCarKm = null;
-                    if (wantCar) {
-                        TmapLegMetrics car = callCarRoute(oLon, oLat, dLon, dLat, timeoutMs);
+                // --- 1) 자동차 경로 ---
+                if (wantCar) {
+                    try {
+                        TmapRouteMetrics car = callCarRoute(oLat, oLon, dLat, dLon, timeoutMs);
                         if (car != null) {
                             etaCarMin = car.etaMin;
                             routeCarKm = car.distanceKm;
                         }
+                    } catch (Exception e) {
+                        log.warn("TMAP car route error: {}", e.toString());
                     }
+                }
 
-                    Double etaWalkMin = null;
-                    Double routeWalkKm = null;
-                    if (wantWalk) {
-                        TmapLegMetrics walk = callPedestrianRoute(oLon, oLat, dLon, dLat, timeoutMs);
+                // --- 2) 보행자 경로 ---
+                if (wantWalk) {
+                    try {
+                        TmapRouteMetrics walk = callPedestrianRoute(oLat, oLon, dLat, dLon, timeoutMs);
                         if (walk != null) {
                             etaWalkMin = walk.etaMin;
                             routeWalkKm = walk.distanceKm;
                         }
+                    } catch (Exception e) {
+                        log.warn("TMAP pedestrian route error: {}", e.toString());
                     }
-
-                    // 최소한 직선거리라도 구했으면 TMAP 성공으로 간주(ETA 실패 시 lineKm만 채워짐)
-                    if (lineKm != null) {
-                        anyTmapSuccess = true;
-
-                        // 경로거리 없으면 직선거리로 대체
-                        if (routeCarKm == null && etaCarMin != null) {
-                            routeCarKm = lineKm;
-                        }
-                        if (routeWalkKm == null && etaWalkMin != null) {
-                            routeWalkKm = lineKm;
-                        }
-
-                        items.add(TmapDtos.Result.builder()
-                                .hpid(cand.getHpid())
-                                .eta_car_min(etaCarMin)
-                                .eta_walk_min(etaWalkMin)
-                                .distance_line_km(lineKm)
-                                .route_car_km(routeCarKm)
-                                .route_walk_km(routeWalkKm)
-                                .source("TMAP")
-                                .build());
-                    } else {
-                        // 이 후보만 ESTIMATE 폴백
-                        log.warn("TMAP route+distance all failed for hpid={}. Fallback to ESTIMATE for this candidate.", cand.getHpid());
-                        items.add(estimateForSingleCandidate(req, oLat, oLon, cand));
-                    }
-                } catch (Exception e) {
-                    log.warn("TMAP candidate error (fallback to ESTIMATE). hpid={}, cause={}", cand.getHpid(), e.toString());
-                    items.add(estimateForSingleCandidate(req, oLat, oLon, cand));
                 }
+
+                // --- 3) 직선 거리 API ---
+                try {
+                    lineKm = callDistanceApi(oLat, oLon, dLat, dLon, timeoutMs);
+                } catch (Exception e) {
+                    log.warn("TMAP /routes/distance error: {}", e.toString());
+                }
+                if (lineKm == null) {
+                    // 마지막 방어: 하버사인
+                    lineKm = haversineKm(oLat, oLon, dLat, dLon);
+                }
+
+                // --- 4) ETA/route 정보가 전부 null이면 ESTIMATE 폴백 ---
+                if (etaCarMin == null && etaWalkMin == null && routeCarKm == null && routeWalkKm == null) {
+                    if (wantCar) {
+                        etaCarMin = estimateCar(lineKm);
+                        routeCarKm = lineKm;
+                    }
+                    if (wantWalk) {
+                        etaWalkMin = estimateWalk(lineKm);
+                        routeWalkKm = lineKm;
+                    }
+                }
+
+                items.add(TmapDtos.Result.builder()
+                        .hpid(cand.getHpid())
+                        .eta_car_min(etaCarMin)
+                        .eta_walk_min(etaWalkMin)
+                        .distance_line_km(lineKm)
+                        .route_car_km(routeCarKm)
+                        .route_walk_km(routeWalkKm)
+                        .source("TMAP")
+                        .build());
             }
-        } catch (Exception e) {
-            // 후보 전체 처리 중에 치명적 에러 → 전부 ESTIMATE로 폴백
-            log.warn("TMAP proxy fatal exception, fallback all to ESTIMATE: {}", e.toString());
-            return estimateFromOriginAndCandidates(req);
         }
 
-        long durationMs = (System.nanoTime() - startNano) / 1_000_000L;
-        String source = anyTmapSuccess ? "TMAP" : "ESTIMATE";
-
-        // 혹시 모든 후보가 ESTIMATE로만 채워졌다면, 한 번 더 전체 폴백 로직으로 정합성 맞춰줌
-        if (!anyTmapSuccess) {
-            return estimateFromOriginAndCandidates(req);
-        }
-
+        long durationMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
         return TmapDtos.RouteResponse.builder()
                 .items(items)
                 .durationMs(durationMs)
-                .source(source)
+                .source("TMAP")
                 .cached(0)
                 .build();
     }
 
-    /* ---------------- TMAP OpenAPI 호출 ---------------- */
+    /* ---------------- 실제 TMAP 호출 helpers ---------------- */
 
     /**
-     * /tmap/routes/distance?version=1
-     * 직선거리(m)를 받아서 km로 변환. 실패 시 null.
+     * 자동차 경로안내 API:
+     *  POST /tmap/routes?version=1
+     *  body: { startX, startY, endX, endY, ... }
+     *  응답: features[0].properties.totalDistance(m), totalTime(sec)
      */
-    private Double callDistanceApi(double startLon, double startLat,
-                                   double endLon, double endLat,
+    private TmapRouteMetrics callCarRoute(double startLat, double startLon,
+                                          double endLat, double endLon,
+                                          int timeoutMs) {
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("startX", startLon); // X = 경도
+        body.put("startY", startLat); // Y = 위도
+        body.put("endX", endLon);
+        body.put("endY", endLat);
+        body.put("reqCoordType", "WGS84GEO");
+        body.put("resCoordType", "WGS84GEO");
+        body.put("searchOption", 0); // 기본 옵션
+
+        JsonNode json = client().post()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/tmap/routes")
+                        .queryParam("version", 1)
+                        .build())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofMillis(timeoutMs))
+                .block();
+
+        if (json == null) {
+            return null;
+        }
+
+        JsonNode props = json.path("features").path(0).path("properties");
+        if (props.isMissingNode()) {
+            return null;
+        }
+
+        long totalDistanceM = props.path("totalDistance").asLong(0);
+        long totalTimeSec = props.path("totalTime").asLong(0);
+        if (totalDistanceM <= 0 || totalTimeSec <= 0) {
+            return null;
+        }
+
+        double distanceKm = totalDistanceM / 1000.0;
+        double etaMin = totalTimeSec / 60.0;
+        return new TmapRouteMetrics(distanceKm, etaMin);
+    }
+
+    /**
+     * 보행자 경로안내 API:
+     *  POST /tmap/routes/pedestrian?version=1
+     *  body: { startX, startY, endX, endY, startName, endName }
+     *  응답: features[0].properties.totalDistance(m), totalTime(sec)
+     */
+    private TmapRouteMetrics callPedestrianRoute(double startLat, double startLon,
+                                                 double endLat, double endLon,
+                                                 int timeoutMs) {
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("startX", startLon); // X = 경도
+        body.put("startY", startLat); // Y = 위도
+        body.put("endX", endLon);
+        body.put("endY", endLat);
+        body.put("startName", "출발지");
+        body.put("endName", "도착지");
+
+        JsonNode json = client().post()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/tmap/routes/pedestrian")
+                        .queryParam("version", 1)
+                        .build())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofMillis(timeoutMs))
+                .block();
+
+        if (json == null) {
+            return null;
+        }
+
+        JsonNode props = json.path("features").path(0).path("properties");
+        if (props.isMissingNode()) {
+            return null;
+        }
+
+        long totalDistanceM = props.path("totalDistance").asLong(0);
+        long totalTimeSec = props.path("totalTime").asLong(0);
+        if (totalDistanceM <= 0 || totalTimeSec <= 0) {
+            return null;
+        }
+
+        double distanceKm = totalDistanceM / 1000.0;
+        double etaMin = totalTimeSec / 60.0;
+        return new TmapRouteMetrics(distanceKm, etaMin);
+    }
+
+    /**
+     * 직선 거리 계산 API:
+     *  GET /tmap/routes/distance?version=1&startX=..&startY=..&endX=..&endY=..
+     *  응답: distanceInfo.distance (meter)
+     */
+    private Double callDistanceApi(double startLat, double startLon,
+                                   double endLat, double endLon,
                                    int timeoutMs) {
-        try {
-            String json = client().get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/tmap/routes/distance")
-                            .queryParam("version", 1)
-                            .queryParam("startX", startLon)
-                            .queryParam("startY", startLat)
-                            .queryParam("endX", endLon)
-                            .queryParam("endY", endLat)
-                            .queryParam("reqCoordType", "WGS84GEO")
-                            .build())
-                    .header("appKey", tmapAppKey)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .timeout(Duration.ofMillis(timeoutMs))
-                    .onErrorResume(e -> {
-                        log.warn("TMAP /routes/distance error: {}", e.toString());
-                        return Mono.empty();
-                    })
-                    .block();
 
-            if (json == null) {
-                return null;
-            }
+        JsonNode json = client().get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/tmap/routes/distance")
+                        .queryParam("version", 1)
+                        .queryParam("startX", startLon)
+                        .queryParam("startY", startLat)
+                        .queryParam("endX", endLon)
+                        .queryParam("endY", endLat)
+                        .build())
+                .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofMillis(timeoutMs))
+                .block();
 
-            JsonNode root = objectMapper.readTree(json);
-            JsonNode distanceInfo = root.get("distanceInfo");
-            if (distanceInfo != null && distanceInfo.get("distance") != null) {
-                double meters = distanceInfo.get("distance").asDouble();
-                return meters / 1000.0;
-            }
-        } catch (Exception e) {
-            log.warn("Failed to parse TMAP distance response: {}", e.toString());
-        }
-        return null;
-    }
-
-    /**
-     * /tmap/routes?version=1
-     * 자동차 경로 안내 → totalDistance(m), totalTime(sec) 를 km/분 단위로 반환. 실패 시 null.
-     */
-    private TmapLegMetrics callCarRoute(double startLon, double startLat,
-                                        double endLon, double endLat,
-                                        int timeoutMs) {
-        try {
-            var body = new java.util.HashMap<String, Object>();
-            body.put("startX", startLon);
-            body.put("startY", startLat);
-            body.put("endX", endLon);
-            body.put("endY", endLat);
-            body.put("reqCoordType", "WGS84GEO");
-            body.put("resCoordType", "WGS84GEO");
-            body.put("searchOption", 0); // 추천경로
-            body.put("trafficInfo", "N");
-
-            String json = client().post()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/tmap/routes")
-                            .queryParam("version", 1)
-                            .build())
-                    .header("appKey", tmapAppKey)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .bodyValue(body)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .timeout(Duration.ofMillis(timeoutMs))
-                    .onErrorResume(e -> {
-                        log.warn("TMAP car route error: {}", e.toString());
-                        return Mono.empty();
-                    })
-                    .block();
-
-            if (json == null) {
-                return null;
-            }
-
-            return parseRouteMetrics(json);
-        } catch (Exception e) {
-            log.warn("Failed to call/parse TMAP car route: {}", e.toString());
+        if (json == null) {
             return null;
         }
-    }
 
-    /**
-     * /tmap/routes/pedestrian?version=1
-     * 보행자 경로 안내 → totalDistance(m), totalTime(sec) 를 km/분 단위로 반환. 실패 시 null.
-     */
-    private TmapLegMetrics callPedestrianRoute(double startLon, double startLat,
-                                               double endLon, double endLat,
-                                               int timeoutMs) {
-        try {
-            var body = new java.util.HashMap<String, Object>();
-            body.put("startX", startLon);
-            body.put("startY", startLat);
-            body.put("endX", endLon);
-            body.put("endY", endLat);
-            body.put("reqCoordType", "WGS84GEO");
-            body.put("resCoordType", "WGS84GEO");
-            body.put("searchOption", "0");
-            body.put("sort", "index");
-
-            String json = client().post()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/tmap/routes/pedestrian")
-                            .queryParam("version", 1)
-                            .build())
-                    .header("appKey", tmapAppKey)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .bodyValue(body)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .timeout(Duration.ofMillis(timeoutMs))
-                    .onErrorResume(e -> {
-                        log.warn("TMAP pedestrian route error: {}", e.toString());
-                        return Mono.empty();
-                    })
-                    .block();
-
-            if (json == null) {
-                return null;
-            }
-
-            return parseRouteMetrics(json);
-        } catch (Exception e) {
-            log.warn("Failed to call/parse TMAP pedestrian route: {}", e.toString());
+        long distanceM = json.path("distanceInfo").path("distance").asLong(0);
+        if (distanceM <= 0) {
             return null;
         }
+        return distanceM / 1000.0;
     }
 
-    /**
-     * 자동차/보행자 공통 응답 파서
-     * - FeatureCollection.features[*].properties.totalDistance/totalTime 사용
-     */
-    private TmapLegMetrics parseRouteMetrics(String json) {
-        try {
-            JsonNode root = objectMapper.readTree(json);
-            JsonNode features = root.get("features");
-            if (features != null && features.isArray()) {
-                for (JsonNode feature : features) {
-                    JsonNode props = feature.get("properties");
-                    if (props == null) continue;
+    /* ---------------- 내부 공용 타입/유틸 ---------------- */
 
-                    JsonNode distanceNode = props.get("totalDistance");
-                    JsonNode timeNode = props.get("totalTime");
-                    if (distanceNode != null && timeNode != null) {
-                        double km = distanceNode.asDouble() / 1000.0;
-                        double min = timeNode.asDouble() / 60.0;
-                        return new TmapLegMetrics(km, min);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Failed to parse TMAP route metrics: {}", e.toString());
+    /** 자동차/보행자 공통 metric */
+    private static final class TmapRouteMetrics {
+        final double distanceKm;
+        final double etaMin;
+
+        private TmapRouteMetrics(double distanceKm, double etaMin) {
+            this.distanceKm = distanceKm;
+            this.etaMin = etaMin;
         }
-        return null;
     }
 
-    /* ---------------- Estimate Fallback ---------------- */
-
     /**
-     * 추정 로직(네트워크 실패 대비) — 기존 구현 유지
+     * 전체 폴백용 (네트워크 아예 안 될 때 등)를 위해 기존 추정 로직 유지
      * - 직선거리(line_km)는 하버사인으로 계산
      * - eta_walk_min: 보행 4.5km/h 가정
      * - eta_car_min : 차량 30km/h 가정
@@ -389,50 +354,36 @@ public class TmapProxyService {
         List<TmapDtos.Result> items = new ArrayList<>();
         if (req.getCandidates() != null) {
             for (TmapDtos.RouteRequest.Candidate cand : req.getCandidates()) {
-                items.add(estimateForSingleCandidate(req, oLat, oLon, cand));
+
+                double dLat = getDouble(cand.getLat());
+                double dLon = getDouble(cand.getLon());
+
+                double lineKm = haversineKm(oLat, oLon, dLat, dLon);
+
+                Double etaWalk = Boolean.FALSE.equals(req.getOptions() == null ? null : req.getOptions().isWalk())
+                        ? null : estimateWalk(lineKm);
+                Double etaCar = Boolean.FALSE.equals(req.getOptions() == null ? null : req.getOptions().isCar())
+                        ? null : estimateCar(lineKm);
+
+                items.add(TmapDtos.Result.builder()
+                        .hpid(cand.getHpid())
+                        .eta_car_min(etaCar)
+                        .eta_walk_min(etaWalk)
+                        .distance_line_km(lineKm)
+                        .route_car_km(lineKm)
+                        .route_walk_km(lineKm)
+                        .source("ESTIMATE")
+                        .build());
             }
         }
 
         return TmapDtos.RouteResponse.builder()
                 .items(items)
-                .durationMs(0L)     // 네트워크 호출 없음
+                .durationMs(0L)
                 .source("ESTIMATE")
                 .cached(0)
                 .build();
     }
-
-    /**
-     * 단일 후보에 대한 ESTIMATE 결과 생성 (공용)
-     */
-    private TmapDtos.Result estimateForSingleCandidate(TmapDtos.RouteRequest req,
-                                                       double oLat, double oLon,
-                                                       TmapDtos.RouteRequest.Candidate cand) {
-
-        double dLat = getDouble(cand.getLat());
-        double dLon = getDouble(cand.getLon());
-
-        // 1) 직선거리 계산(km) — 하버사인
-        double lineKm = haversineKm(oLat, oLon, dLat, dLon);
-
-        // 2) 옵션에 따라 모드별 ETA 계산(끄면 null)
-        boolean wantCar = (req.getOptions() == null) || Boolean.TRUE.equals(req.getOptions().isCar());
-        boolean wantWalk = (req.getOptions() == null) || Boolean.TRUE.equals(req.getOptions().isWalk());
-
-        Double etaWalk = wantWalk ? estimateWalk(lineKm) : null; // 4.5km/h 가정
-        Double etaCar = wantCar ? estimateCar(lineKm) : null;    // 30km/h 가정
-
-        return TmapDtos.Result.builder()
-                .hpid(cand.getHpid())
-                .eta_car_min(etaCar)
-                .eta_walk_min(etaWalk)
-                .distance_line_km(lineKm)
-                .route_car_km(lineKm)
-                .route_walk_km(lineKm)
-                .source("ESTIMATE") // 폴백 산출치임을 명시
-                .build();
-    }
-
-    /* ---------------- Small utils ---------------- */
 
     // 보행 ETA 추정(분) : 4.5 km/h
     private double estimateWalk(double lineKm) {
@@ -464,18 +415,5 @@ public class TmapProxyService {
                 Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
                         Math.sin(dLon / 2) * Math.sin(dLon / 2);
         return 2 * R * Math.asin(Math.sqrt(a));
-    }
-
-    /**
-     * 자동차/보행 공통 메트릭 홀더
-     */
-    private static class TmapLegMetrics {
-        final double distanceKm;
-        final double etaMin;
-
-        TmapLegMetrics(double distanceKm, double etaMin) {
-            this.distanceKm = distanceKm;
-            this.etaMin = etaMin;
-        }
     }
 }
