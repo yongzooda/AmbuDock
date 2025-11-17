@@ -1,383 +1,398 @@
 // src/components/MapView.tsx
 
-import { useState, type MouseEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Crosshair } from 'lucide-react';
-import { HospitalMarker } from './HospitalMarker';
 import { MapLegend } from './MapLegend';
 import { MarkerTooltip } from './MarkerTooltip';
 import { MarkerHighlight } from './MarkerHighlight';
+import type { HospitalListItem, HliLevel } from '../types';
 
 type MapViewProps = {
-  highlightedMarkerId?: string | null;
+  coords: { lat: number; lon: number } | null;
+  hospitals: HospitalListItem[];
+  selectedHospitalId?: string | null;
+  onMarkerSelect?: (hpid: string) => void;
 };
 
-export function MapView({ highlightedMarkerId }: MapViewProps) {
-  const [selectedMarker, setSelectedMarker] = useState<string | null>('green-1');
+/**
+ * 병원 리스트 아이템에 연락처/주소 필드가 옵션으로 붙어올 수 있어서
+ * 툴팁에서만 사용할 보조 타입
+ */
+type HospitalWithContact = HospitalListItem & {
+  telEmergency?: string;
+  tel_emergency?: string;
+  addrRoad?: string;
+  address?: string;
+};
 
-  // Calculate pixel position from percentage
-  const getPixelPosition = (
-    leftPercent: string,
-    topPercent: string,
-    containerWidth: number = 390,
-    containerHeight: number = 500,
-  ) => {
-    const left = (parseFloat(leftPercent) / 100) * containerWidth;
-    const top = (parseFloat(topPercent) / 100) * containerHeight;
-    return { x: left, y: top };
-  };
+/**
+ * Kakao Maps 최소 타입 정의
+ */
+declare global {
+  interface KakaoLatLng {
+    readonly __brand?: 'KakaoLatLng';
+  }
 
-  const handleMapClick = () => {
-    setSelectedMarker(null);
-  };
+  interface KakaoLatLngBounds {
+    extend(latlng: KakaoLatLng): void;
+  }
 
-  const handleMarkerClick = (markerId: string, e: MouseEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    setSelectedMarker(markerId);
-  };
+  interface KakaoPoint {
+    x: number;
+    y: number;
+  }
 
-  // GREEN marker is centered in the safe viewing area (corresponds to Card #1)
-  const greenMarkerPosition = { left: '50%', top: '45%' };
-  const tooltipPosition = getPixelPosition(
-    greenMarkerPosition.left,
-    greenMarkerPosition.top,
+  interface KakaoMapProjection {
+    fromLatLngToContainerPoint(latlng: KakaoLatLng): KakaoPoint;
+  }
+
+  interface KakaoMap {
+    setBounds(bounds: KakaoLatLngBounds): void;
+    panTo(latlng: KakaoLatLng): void;
+    getLevel(): number;
+    setLevel(level: number): void;
+    getProjection(): KakaoMapProjection;
+  }
+
+  interface KakaoCustomOverlay {
+    setMap(map: KakaoMap | null): void;
+    getPosition?(): KakaoLatLng;
+    setPosition?(latlng: KakaoLatLng): void;
+  }
+
+  interface KakaoMapsNamespace {
+    LatLng: new (lat: number, lng: number) => KakaoLatLng;
+    LatLngBounds: new () => KakaoLatLngBounds;
+    Map: new (
+      container: HTMLElement,
+      options: { center: KakaoLatLng; level: number }
+    ) => KakaoMap;
+    CustomOverlay: new (options: {
+      position: KakaoLatLng;
+      yAnchor?: number;
+      content: HTMLElement;
+    }) => KakaoCustomOverlay;
+    load(callback: () => void): void;
+  }
+
+  interface KakaoNamespace {
+    maps: KakaoMapsNamespace;
+  }
+
+  interface Window {
+    kakao?: KakaoNamespace;
+  }
+}
+
+const levelColors: Record<HliLevel, string> = {
+  GREEN: '#10B981',
+  YELLOW: '#F59E0B',
+  RED: '#EF4444',
+  GRAY: '#9CA3AF',
+};
+
+// 지도에서 기본 반경(병원 검색 반경과 맞춤)
+const DEFAULT_RADIUS_KM = 15;
+
+export function MapView({
+  coords,
+  hospitals,
+  selectedHospitalId,
+  onMarkerSelect,
+}: MapViewProps) {
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<KakaoMap | null>(null);
+  const overlayMapRef = useRef<Map<string, KakaoCustomOverlay>>(
+    new Map<string, KakaoCustomOverlay>()
   );
+  const myLocationOverlayRef = useRef<KakaoCustomOverlay | null>(null);
 
-  // Show highlight for card selection (hospital-1 = Card #1 = green marker)
-  const showHighlight = highlightedMarkerId === 'hospital-1';
+  // 현재 열려 있는 툴팁 상태
+  const [tooltipState, setTooltipState] = useState<{
+    hospital: HospitalWithContact;
+    position: { x: number; y: number };
+  } | null>(null);
+
+  /**
+   * 내 위치 마커(파란 링 + 점)를 생성/이동시키는 헬퍼
+   */
+  const updateMyLocationOverlay = (
+    kakaoMaps: KakaoMapsNamespace,
+    map: KakaoMap,
+    lat: number,
+    lon: number
+  ) => {
+    const pos = new kakaoMaps.LatLng(lat, lon);
+
+    // 이미 존재하면 위치만 업데이트
+    if (myLocationOverlayRef.current) {
+      if (myLocationOverlayRef.current.setPosition) {
+        myLocationOverlayRef.current.setPosition(pos);
+      }
+      myLocationOverlayRef.current.setMap(map);
+      return;
+    }
+
+    // 새로 생성
+    const container = document.createElement('div');
+    container.style.position = 'relative';
+    container.style.width = '24px';
+    container.style.height = '24px';
+
+    const ring = document.createElement('div');
+    ring.style.position = 'absolute';
+    ring.style.left = '0';
+    ring.style.top = '0';
+    ring.style.width = '24px';
+    ring.style.height = '24px';
+    ring.style.borderRadius = '999px';
+    ring.style.background = 'rgba(37, 99, 235, 0.15)';
+    ring.style.border = '2px solid rgba(37, 99, 235, 0.7)';
+
+    const dot = document.createElement('div');
+    dot.style.position = 'absolute';
+    dot.style.left = '50%';
+    dot.style.top = '50%';
+    dot.style.width = '8px';
+    dot.style.height = '8px';
+    dot.style.marginLeft = '-4px';
+    dot.style.marginTop = '-4px';
+    dot.style.borderRadius = '999px';
+    dot.style.background = '#2563EB';
+
+    container.appendChild(ring);
+    container.appendChild(dot);
+
+    const overlay = new kakaoMaps.CustomOverlay({
+      position: pos,
+      yAnchor: 0.5,
+      content: container,
+    });
+
+    overlay.setMap(map);
+    myLocationOverlayRef.current = overlay;
+  };
+
+  /**
+   * 내 위치를 중심으로 반경 15km가 보이도록 지도 bounds 맞추기
+   */
+  const fitMapToRadius = (
+    kakaoMaps: KakaoMapsNamespace,
+    map: KakaoMap,
+    lat: number,
+    lon: number,
+    radiusKm: number = DEFAULT_RADIUS_KM
+  ) => {
+    const bounds = new kakaoMaps.LatLngBounds();
+
+    // 위도 1도 ≈ 111km
+    const deltaLat = radiusKm / 111;
+
+    // 경도는 위도에 따라 달라짐
+    const rad = (lat * Math.PI) / 180;
+    const kmPerLonDegree = 111 * Math.cos(rad);
+    const deltaLon = radiusKm / kmPerLonDegree;
+
+    const south = lat - deltaLat;
+    const north = lat + deltaLat;
+    const west = lon - deltaLon;
+    const east = lon + deltaLon;
+
+    bounds.extend(new kakaoMaps.LatLng(south, west));
+    bounds.extend(new kakaoMaps.LatLng(north, east));
+
+    map.setBounds(bounds);
+
+    // 너무 확대/축소 방지용 레벨 클램프
+    const level = map.getLevel();
+    const minLevel = 3;
+    const maxLevel = 8;
+
+    if (level < minLevel) {
+      map.setLevel(minLevel);
+    } else if (level > maxLevel) {
+      map.setLevel(maxLevel);
+    }
+  };
+
+  // Kakao SDK 로드 + 지도 초기화
+  useEffect(() => {
+    const scriptId = 'kakao-map-sdk';
+
+    const initMap = () => {
+      if (!mapRef.current || !window.kakao?.maps) return;
+
+      const center = new window.kakao.maps.LatLng(
+        coords?.lat ?? 37.5665, // 기본: 서울 시청
+        coords?.lon ?? 126.978
+      );
+
+      const map = new window.kakao.maps.Map(mapRef.current, {
+        center,
+        level: 5,
+      });
+
+      mapInstanceRef.current = map;
+    };
+
+    // 이미 kakao.maps 가 있으면 바로 load
+    if (window.kakao && window.kakao.maps) {
+      window.kakao.maps.load(initMap);
+      return;
+    }
+
+    // 스크립트만 있는 경우
+    if (document.getElementById(scriptId)) {
+      window.kakao?.maps.load(initMap);
+      return;
+    }
+
+    // 처음 로드
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.async = true;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${
+      import.meta.env.VITE_KAKAO_MAP_KEY
+    }&autoload=false`;
+    script.onload = () => {
+      window.kakao?.maps.load(initMap);
+    };
+    script.onerror = (e) => {
+      console.error('[KAKAO] sdk 로드 실패', e);
+    };
+    document.head.appendChild(script);
+  }, [coords?.lat, coords?.lon]);
+
+  /**
+   * coords 가 준비되면:
+   *  - 내 위치 마커 자동 표시
+   *  - 내 위치 기준 반경 15km가 보이도록 지도 bounds 맞춤
+   */
+  useEffect(() => {
+    const kakao = window.kakao;
+    const map = mapInstanceRef.current;
+    if (!kakao?.maps || !map || !coords) return;
+
+    const { lat, lon } = coords;
+
+    updateMyLocationOverlay(kakao.maps, map, lat, lon);
+    fitMapToRadius(kakao.maps, map, lat, lon);
+  }, [coords]);
+
+  // 병원 목록이 바뀔 때마다 병원 마커 다시 그림
+  useEffect(() => {
+    const kakao = window.kakao;
+    const map = mapInstanceRef.current;
+    if (!kakao?.maps || !map) return;
+
+    // 병원 변경되면 툴팁은 일단 닫아둔다
+    setTooltipState(null);
+
+    // 기존 병원 오버레이 제거
+    overlayMapRef.current.forEach((ov) => ov.setMap(null));
+    overlayMapRef.current.clear();
+
+    if (hospitals.length === 0) return;
+
+    hospitals.forEach((h) => {
+      const pos = new kakao.maps.LatLng(h.lat, h.lon);
+      const color = levelColors[h.hli.level];
+
+      const container = document.createElement('div');
+      container.style.width = '18px';
+      container.style.height = '18px';
+      container.style.borderRadius = '999px';
+      container.style.background = color;
+      container.style.boxShadow = '0 2px 8px rgba(0,0,0,0.12)';
+      container.style.display = 'flex';
+      container.style.alignItems = 'center';
+      container.style.justifyContent = 'center';
+      container.style.cursor = 'pointer';
+
+      const inner = document.createElement('div');
+      inner.style.width = '10px';
+      inner.style.height = '10px';
+      inner.style.borderRadius = '999px';
+      inner.style.background = '#ffffff';
+
+      container.appendChild(inner);
+
+      container.onclick = () => {
+        // 1) 상위에 선택 이벤트 전달 (카드와 동기화)
+        onMarkerSelect?.(h.hpid);
+
+        // 2) Kakao projection으로 화면 좌표 계산 → 툴팁/하이라이트 위치
+        try {
+          const projection = map.getProjection();
+          const point = projection.fromLatLngToContainerPoint(pos);
+
+          setTooltipState({
+            hospital: h,
+            position: { x: point.x, y: point.y },
+          });
+        } catch (e) {
+          console.error('marker click projection error', e);
+          setTooltipState(null);
+        }
+      };
+
+      const overlay = new kakao.maps.CustomOverlay({
+        position: pos,
+        yAnchor: 1,
+        content: container,
+      });
+
+      overlay.setMap(map);
+      overlayMapRef.current.set(h.hpid, overlay);
+    });
+  }, [hospitals, onMarkerSelect]);
+
+  // 카드 선택 시 해당 병원 마커로 부드럽게 이동
+  useEffect(() => {
+    const kakao = window.kakao;
+    const map = mapInstanceRef.current;
+    if (!kakao?.maps || !map || !selectedHospitalId) return;
+
+    const overlay = overlayMapRef.current.get(selectedHospitalId);
+    if (!overlay || !overlay.getPosition) return;
+
+    const pos = overlay.getPosition();
+    if (pos) {
+      map.panTo(pos);
+    }
+  }, [selectedHospitalId]);
+
+  // 현위치 버튼: 내 위치 + 반경 15km로 다시 맞추기
+  const handleRecenter = () => {
+    const kakao = window.kakao;
+    const map = mapInstanceRef.current;
+    if (!kakao?.maps || !map || !coords) return;
+
+    const { lat, lon } = coords;
+
+    updateMyLocationOverlay(kakao.maps, map, lat, lon);
+    fitMapToRadius(kakao.maps, map, lat, lon);
+  };
+
+  // 툴팁이 사용할 컨테이너 경계 (맵 영역 크기 기준)
+  const tooltipBounds = mapRef.current
+    ? {
+        top: 0,
+        left: 0,
+        right: mapRef.current.clientWidth,
+        bottom: mapRef.current.clientHeight,
+      }
+    : undefined;
 
   return (
-    <div className="relative flex-1 overflow-hidden">
-      {/* Seoul Jung-gu realistic map base */}
-      <div
-        className="w-full h-full relative"
-        style={{
-          background: '#F5F5F5',
-          opacity: 1,
-          filter: 'none',
-        }}
-        onClick={handleMapClick}
-      >
-        {/* Map base with roads and landmarks - panned to keep centered marker looking natural */}
-        <svg
-          className="w-full h-full"
-          viewBox="0 0 390 500"
-          preserveAspectRatio="xMidYMid slice"
-          style={{ opacity: 1 }}
-        >
-          {/* Background */}
-          <rect width="390" height="500" fill="#F5F5F5" />
+    <div className="relative h-full overflow-hidden">
+      {/* 실제 Kakao Map 이 그려지는 영역 */}
+      <div ref={mapRef} className="absolute inset-0" />
 
-          {/* Building blocks - soft gray - adjusted positions for natural look */}
-          <rect
-            x="40"
-            y="100"
-            width="60"
-            height="80"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="120"
-            y="80"
-            width="70"
-            height="90"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="220"
-            y="90"
-            width="55"
-            height="75"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="300"
-            y="70"
-            width="65"
-            height="95"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="50"
-            y="220"
-            width="75"
-            height="85"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="160"
-            y="210"
-            width="60"
-            height="70"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="250"
-            y="220"
-            width="80"
-            height="90"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="70"
-            y="340"
-            width="65"
-            height="75"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="180"
-            y="350"
-            width="70"
-            height="80"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-          <rect
-            x="290"
-            y="335"
-            width="60"
-            height="85"
-            fill="#E8E8E8"
-            stroke="#D0D0D0"
-            strokeWidth="0.5"
-          />
-
-          {/* Park area - pale green (덕수궁) */}
-          <rect
-            x="100"
-            y="160"
-            width="50"
-            height="50"
-            fill="#E8F5E9"
-            stroke="#C8E6C9"
-            strokeWidth="0.5"
-          />
-          <text
-            x="125"
-            y="190"
-            fill="#558B2F"
-            fontSize="7"
-            textAnchor="middle"
-            fontWeight="500"
-          >
-            덕수궁
-          </text>
-
-          {/* Primary roads - darker gray with white center line */}
-          {/* 세종대로 (vertical main road) */}
-          <rect x="185" y="0" width="18" height="500" fill="#B8B8B8" />
-          <line
-            x1="194"
-            y1="0"
-            x2="194"
-            y2="500"
-            stroke="white"
-            strokeWidth="1"
-            strokeDasharray="8,6"
-          />
-          <text
-            x="194"
-            y="40"
-            fill="#666666"
-            fontSize="8"
-            textAnchor="middle"
-            fontWeight="500"
-          >
-            세종대로
-          </text>
-
-          {/* 남대문로 (diagonal) */}
-          <path d="M 60 200 L 340 240" stroke="#B8B8B8" strokeWidth="14" />
-          <line
-            x1="70"
-            y1="203"
-            x2="330"
-            y2="238"
-            stroke="white"
-            strokeWidth="1"
-            strokeDasharray="6,4"
-          />
-          <text
-            x="200"
-            y="225"
-            fill="#666666"
-            fontSize="8"
-            textAnchor="middle"
-            fontWeight="500"
-          >
-            남대문로
-          </text>
-
-          {/* 을지로 (horizontal) */}
-          <rect x="0" y="310" width="390" height="14" fill="#B8B8B8" />
-          <line
-            x1="0"
-            y1="317"
-            x2="390"
-            y2="317"
-            stroke="white"
-            strokeWidth="1"
-            strokeDasharray="8,6"
-          />
-          <text
-            x="320"
-            y="320"
-            fill="#666666"
-            fontSize="8"
-            textAnchor="middle"
-            fontWeight="500"
-          >
-            을지로
-          </text>
-
-          {/* Secondary roads - lighter gray */}
-          <rect x="0" y="180" width="390" height="8" fill="#D0D0D0" />
-          <rect x="265" y="0" width="8" height="500" fill="#D0D0D0" />
-          <rect x="125" y="0" width="8" height="500" fill="#D0D0D0" />
-
-          {/* Landmark labels */}
-          <text
-            x="195"
-            y="130"
-            fill="#333333"
-            fontSize="9"
-            textAnchor="middle"
-            fontWeight="600"
-          >
-            시청
-          </text>
-        </svg>
-
-        {/* User location - centered near upper-middle */}
-        <div
-          className="absolute left-1/2 top-1/3 -translate-x-1/2 -translate-y-1/2"
-          style={{ zIndex: 5 }}
-        >
-          {/* Accuracy ring */}
-          <div
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-15 h-15 rounded-full"
-            style={{
-              background: 'rgba(59, 130, 246, 0.16)',
-              border: '1px solid rgba(59, 130, 246, 0.4)',
-            }}
-          />
-          {/* Blue dot */}
-          <div
-            className="relative w-2.5 h-2.5 rounded-full"
-            style={{ background: '#2563EB', zIndex: 6 }}
-            role="img"
-            aria-label="현재 위치"
-          />
-        </div>
-
-        {/* Marker highlights - show when card is selected */}
-        {showHighlight && (
-          <MarkerHighlight
-            style={{
-              left: greenMarkerPosition.left,
-              top: greenMarkerPosition.top,
-              transform: 'translate(-50%, -50%)',
-              zIndex: 4,
-            }}
-          />
-        )}
-
-        {/* Exactly 4 hospital markers */}
-        {/* GREEN hospital marker - centered in safe viewing area (Card #1) */}
-        <div
-          className="absolute cursor-pointer transition-transform hover:scale-110"
-          style={{
-            left: greenMarkerPosition.left,
-            top: greenMarkerPosition.top,
-            zIndex: 5,
-            transform: 'translate(-50%, -50%)',
-          }}
-          onClick={(e) => handleMarkerClick('green-1', e)}
-        >
-          <HospitalMarker level="GREEN" />
-        </div>
-
-        {/* YELLOW hospital marker (Card #2) */}
-        <div
-          className="absolute cursor-pointer transition-transform hover:scale-110"
-          style={{
-            left: '65%',
-            top: '35%',
-            zIndex: 5,
-            transform: 'translate(-50%, -50%)',
-          }}
-          onClick={(e) => handleMarkerClick('yellow-1', e)}
-        >
-          <HospitalMarker level="YELLOW" />
-        </div>
-
-        {/* RED hospital marker (Card #3) */}
-        <div
-          className="absolute cursor-pointer transition-transform hover:scale-110"
-          style={{
-            left: '75%',
-            top: '55%',
-            zIndex: 5,
-            transform: 'translate(-50%, -50%)',
-          }}
-          onClick={(e) => handleMarkerClick('red-1', e)}
-        >
-          <HospitalMarker level="RED" />
-        </div>
-
-        {/* GRAY hospital marker (stale ≥60m) with clock icon */}
-        <div
-          className="absolute cursor-pointer transition-transform hover:scale-110"
-          style={{
-            left: '25%',
-            top: '60%',
-            zIndex: 5,
-            transform: 'translate(-50%, -50%)',
-          }}
-          onClick={(e) => handleMarkerClick('gray-1', e)}
-        >
-          <HospitalMarker level="GRAY" isStale />
-        </div>
-
-        {/* Marker Tooltip - shows for selected marker (when clicked) */}
-        {selectedMarker === 'green-1' && (
-          <MarkerTooltip
-            hospitalName="한빛병원"
-            phone="010-1234-5678"
-            address="서울 중구 남대문로 00"
-            hli={87}
-            level="GREEN"
-            minutesAgo={2}
-            hvecCount={3}
-            variant="warn"
-            warnMessage="호우경보(중구)"
-            position={tooltipPosition}
-            containerBounds={{ top: 80, left: 16, right: 374, bottom: 490 }}
-          />
-        )}
-      </div>
-
-      {/* Map Legend - bottom-left */}
+      {/* 범례 */}
       <MapLegend />
 
-      {/* FAB - 현위치 */}
+      {/* 현위치 FAB */}
       <button
         className="absolute bottom-6 right-4 w-14 h-14 rounded-full bg-white flex items-center justify-center transition-transform hover:scale-95 active:scale-90"
         style={{
@@ -386,9 +401,56 @@ export function MapView({ highlightedMarkerId }: MapViewProps) {
           zIndex: 10,
         }}
         aria-label="현위치로 재중심"
+        onClick={handleRecenter}
       >
         <Crosshair className="w-6 h-6" style={{ color: '#111827' }} />
       </button>
+
+      {/* 선택된 마커 하이라이트 + 툴팁 */}
+      {tooltipState && (
+        <>
+          <MarkerHighlight
+            style={{
+              left: tooltipState.position.x,
+              top: tooltipState.position.y,
+              transform: 'translate(-50%, -50%)',
+              pointerEvents: 'none',
+              zIndex: 25,
+            }}
+          />
+
+          {(() => {
+            const hospital = tooltipState.hospital;
+
+            const phone =
+              hospital.telEmergency ?? hospital.tel_emergency ?? undefined;
+            const address = hospital.addrRoad ?? hospital.address ?? undefined;
+
+            return (
+              <MarkerTooltip
+                hospitalName={hospital.name}
+                phone={phone}
+                address={address}
+                hli={hospital.hli.score}
+                level={hospital.hli.level}
+                minutesAgo={
+                  hospital.hli.lagSec
+                    ? Math.max(0, Math.round(hospital.hli.lagSec / 60))
+                    : 0
+                }
+                // TODO: hvecCount / WARN 데이터는 추후 HospitalListItem에 붙으면 여기서 채워 넣기
+                hvecCount={undefined}
+                warnMessage={undefined}
+                variant={
+                  hospital.hli.staleLevel === 'HARD' ? 'gray' : 'default'
+                }
+                position={tooltipState.position}
+                containerBounds={tooltipBounds}
+              />
+            );
+          })()}
+        </>
+      )}
     </div>
   );
 }

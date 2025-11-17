@@ -242,12 +242,6 @@ export default function App() {
     };
   }, [coords, hasLoadedHospitals, allHospitals.length, radiusKm]);
 
-  // 현재는 Top1 후보를 항상 'hospital-1' 마커와 연결
-  const highlightedMarkerId = useMemo(
-    () => (cards[0] ? 'hospital-1' : null),
-    [cards],
-  );
-
   const isGeoOverlayOpen = !!geoError && !geoOverlayClosed;
 
   return (
@@ -261,7 +255,13 @@ export default function App() {
 
       <div className="pt-14 h-screen flex flex-col">
         <div className="relative flex-1">
-          <MapView highlightedMarkerId={highlightedMarkerId} />
+          {/* ✅ Kakao Map 연동용 MapView */}
+          <MapView
+            coords={coords ?? null}
+            hospitals={allHospitals}
+            selectedHospitalId={selectedId}
+            onMarkerSelect={(hpid) => setSelectedId(hpid)}
+          />
         </div>
 
         <BottomCardBar

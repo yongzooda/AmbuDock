@@ -1,9 +1,13 @@
 /* src/index.css */
 
+@import "./styles/globals.css";  
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import "./styles/globals.css";
-
-html, body, #root { height: 100%; }
+html,
+body,
+#root {
+  height: 100%;
+}
