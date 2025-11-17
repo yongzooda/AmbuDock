@@ -1,5 +1,8 @@
+// src/components/MarkerTooltip.tsx
+
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { HospitalMarker } from './HospitalMarker';
 
 type TooltipVariant = 'default' | 'warn' | 'missing-data' | 'gray';
 type Placement = 'top' | 'bottom';
@@ -58,13 +61,12 @@ export function MarkerTooltip({
     let finalX = position.x;
     const finalY = position.y;
 
-    // Check if tooltip fits above the marker
+    // 위쪽으로 공간이 부족하면 아래로 배치
     if (position.y - tooltipHeight - offset < containerBounds.top) {
-      // Not enough space above, flip to bottom
       newPlacement = 'bottom';
     }
 
-    // Horizontal bounds checking
+    // 좌우 경계 보정
     const halfWidth = tooltipWidth / 2;
     if (finalX - halfWidth < containerBounds.left) {
       finalX = containerBounds.left + halfWidth;
@@ -90,7 +92,7 @@ export function MarkerTooltip({
         marginTop: isBottom ? `${offset}px` : `-${offset}px`,
       }}
     >
-      {/* Pointer arrow - top of tooltip when placement is bottom */}
+      {/* 아래 배치일 때 화살표 (툴팁 위쪽) */}
       {isBottom && (
         <>
           <div
@@ -127,20 +129,25 @@ export function MarkerTooltip({
           border: '1px solid #E5E7EB',
           minWidth: '200px',
           maxWidth: '260px',
-          marginTop: isBottom ? '0' : '0',
-          marginBottom: isBottom ? '0' : '0',
         }}
         role="tooltip"
         aria-label={
           `${hospitalName}${showWarn ? `, 경보: WARN ${warnMessage}` : ''}, HLI ${hli}점 ${level}, ${minutesAgo}분 전${hvecCount !== undefined ? `, 가용 응급실 병상수 ${hvecCount}개` : ''}`
         }
       >
-        {/* Hospital name - bold */}
-        <div className="mb-2" style={{ fontSize: '16px', fontWeight: 700 }}>
-          {hospitalName}
+        {/* 병원 이름 + 레벨 아이콘 */}
+        <div className="mb-2 flex items-center gap-2">
+          <HospitalMarker
+            level={level}
+            isStale={isGray}
+            style={{ transform: 'scale(0.9)' }}
+          />
+          <div style={{ fontSize: '16px', fontWeight: 700 }}>
+            {hospitalName}
+          </div>
         </div>
 
-        {/* WARN badge - only in warn variant, directly under hospital name */}
+        {/* WARN 배지 */}
         {showWarn && (
           <div
             className="mb-2 px-2 py-1 rounded-md inline-flex items-center gap-1.5"
@@ -157,21 +164,21 @@ export function MarkerTooltip({
           </div>
         )}
 
-        {/* Phone - only if provided */}
+        {/* 전화번호 */}
         {phone && (
           <div className="mb-1" style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280' }}>
             전화 {phone}
           </div>
         )}
 
-        {/* Address - only if provided */}
+        {/* 주소 */}
         {address && (
           <div className="mb-2" style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280', wordWrap: 'break-word' }}>
             주소 {address}
           </div>
         )}
 
-        {/* HLI status line */}
+        {/* HLI 상태 */}
         <div className="mb-1" style={{ fontSize: '14px', fontWeight: 600 }}>
           <span>HLI {hli}</span>
           <span> · </span>
@@ -180,7 +187,7 @@ export function MarkerTooltip({
           <span style={{ color: isGray ? '#9CA3AF' : 'inherit' }}>{minutesAgo}분 전</span>
         </div>
 
-        {/* ER capacity - only if provided */}
+        {/* ER 가용 수 */}
         {hvecCount !== undefined && (
           <div 
             className="mb-1" 
@@ -192,7 +199,7 @@ export function MarkerTooltip({
         )}
       </div>
 
-      {/* Pointer arrow - bottom of tooltip when placement is top */}
+      {/* 위 배치일 때 화살표 (툴팁 아래쪽) */}
       {!isBottom && (
         <>
           <div
