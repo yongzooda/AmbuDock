@@ -44,7 +44,8 @@ declare global {
   }
 
   interface KakaoMapProjection {
-    fromLatLngToContainerPoint(latlng: KakaoLatLng): KakaoPoint;
+    // ✅ 카카오 지도: containerPointFromCoords 가 정식 메서드
+    containerPointFromCoords(latlng: KakaoLatLng): KakaoPoint;
   }
 
   interface KakaoMap {
@@ -107,6 +108,9 @@ export function MapView({
     new Map<string, KakaoCustomOverlay>()
   );
   const myLocationOverlayRef = useRef<KakaoCustomOverlay | null>(null);
+
+  // ✅ 지도 준비 여부 플래그
+  const [mapReady, setMapReady] = useState(false);
 
   // onMarkerSelect를 ref로 보관해서 effect 의존성에서 제거
   const onMarkerSelectRef = useRef<MapViewProps['onMarkerSelect'] | undefined>(
@@ -229,17 +233,15 @@ export function MapView({
     }
   };
 
-  // Kakao SDK 로드 + 지도 초기화
+  // ✅ Kakao SDK 로드 + 지도 초기화 (한 번만)
   useEffect(() => {
     const scriptId = 'kakao-map-sdk';
 
     const initMap = () => {
       if (!mapRef.current || !window.kakao?.maps) return;
 
-      const center = new window.kakao.maps.LatLng(
-        coords?.lat ?? 37.5665, // 기본: 서울 시청
-        coords?.lon ?? 126.978
-      );
+      // 초기 중심은 서울 시청 고정
+      const center = new window.kakao.maps.LatLng(37.5665, 126.978);
 
       const map = new window.kakao.maps.Map(mapRef.current, {
         center,
@@ -247,6 +249,7 @@ export function MapView({
       });
 
       mapInstanceRef.current = map;
+      setMapReady(true); // ✅ 지도 준비 완료
     };
 
     // 이미 kakao.maps 가 있으면 바로 load
@@ -275,7 +278,7 @@ export function MapView({
       console.error('[KAKAO] sdk 로드 실패', e);
     };
     document.head.appendChild(script);
-  }, [coords?.lat, coords?.lon]);
+  }, []);
 
   /**
    * coords 가 준비되면:
@@ -301,7 +304,9 @@ export function MapView({
 
     const pos = new kakao.maps.LatLng(h.lat, h.lon);
     const projection = map.getProjection();
-    const point = projection.fromLatLngToContainerPoint(pos);
+
+    // ✅ 카카오: containerPointFromCoords 사용
+    const point = projection.containerPointFromCoords(pos);
 
     // 카드/Top3와 동기화
     onMarkerSelectRef.current?.(h.hpid);
@@ -329,11 +334,11 @@ export function MapView({
     }
   };
 
-  // 병원 목록이 바뀔 때마다 병원 마커 다시 그림
+  // 병원 목록이 바뀌거나 지도 준비되면 병원 마커 다시 그림
   useEffect(() => {
     const kakao = window.kakao;
     const map = mapInstanceRef.current;
-    if (!kakao?.maps || !map) return;
+    if (!mapReady || !kakao?.maps || !map) return;
 
     // 기존 병원 오버레이 제거
     overlayMapRef.current.forEach((ov) => ov.setMap(null));
@@ -377,7 +382,7 @@ export function MapView({
       overlay.setMap(map);
       overlayMapRef.current.set(h.hpid, overlay);
     });
-  }, [hospitals]); // onMarkerSelect는 ref로 처리
+  }, [hospitals, mapReady]); // ✅ mapReady 의존성 추가
 
   // 카드 선택 시 해당 병원 마커로 부드럽게 이동
   useEffect(() => {
