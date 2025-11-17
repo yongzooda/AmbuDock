@@ -6,6 +6,7 @@ import { MapLegend } from './MapLegend';
 import { MarkerTooltip } from './MarkerTooltip';
 import { MarkerHighlight } from './MarkerHighlight';
 import type { HospitalListItem, HliLevel } from '../types';
+import { Api } from '../lib/api';
 
 type MapViewProps = {
   coords: { lat: number; lon: number } | null;
@@ -106,6 +107,19 @@ export function MapView({
     new Map<string, KakaoCustomOverlay>()
   );
   const myLocationOverlayRef = useRef<KakaoCustomOverlay | null>(null);
+
+  // onMarkerSelect를 ref로 보관해서 effect 의존성에서 제거
+  const onMarkerSelectRef = useRef<MapViewProps['onMarkerSelect'] | undefined>(
+    onMarkerSelect
+  );
+  useEffect(() => {
+    onMarkerSelectRef.current = onMarkerSelect;
+  }, [onMarkerSelect]);
+
+  // hpid -> ER 가용 병상수(hvec) 캐시
+  const [erCache, setErCache] = useState<Map<string, number>>(
+    () => new Map<string, number>()
+  );
 
   // 현재 열려 있는 툴팁 상태
   const [tooltipState, setTooltipState] = useState<{
@@ -279,14 +293,47 @@ export function MapView({
     fitMapToRadius(kakao.maps, map, lat, lon);
   }, [coords]);
 
+  // 병원 마커 클릭 시 처리: 카드 선택 + 툴팁 위치 + ER 가용수 로딩
+  const handleMarkerClick = async (h: HospitalWithContact) => {
+    const kakao = window.kakao;
+    const map = mapInstanceRef.current;
+    if (!kakao?.maps || !map) return;
+
+    const pos = new kakao.maps.LatLng(h.lat, h.lon);
+    const projection = map.getProjection();
+    const point = projection.fromLatLngToContainerPoint(pos);
+
+    // 카드/Top3와 동기화
+    onMarkerSelectRef.current?.(h.hpid);
+
+    // 툴팁은 바로 띄움(ER 가용수는 나중에 채워져도 됨)
+    setTooltipState({
+      hospital: h,
+      position: { x: point.x, y: point.y },
+    });
+
+    // ER 가용수가 캐시에 없으면 상세 API 한 번만 호출
+    if (!erCache.has(h.hpid)) {
+      try {
+        const d = await Api.hospitalDetail(h.hpid);
+        const hvec = d.hvec ?? 0;
+
+        setErCache((prev) => {
+          const next = new Map(prev);
+          next.set(h.hpid, hvec);
+          return next;
+        });
+      } catch (e) {
+        console.error('[MapView] hospitalDetail error', e);
+      }
+    }
+  };
+
   // 병원 목록이 바뀔 때마다 병원 마커 다시 그림
   useEffect(() => {
     const kakao = window.kakao;
     const map = mapInstanceRef.current;
     if (!kakao?.maps || !map) return;
-
-    // 병원 변경되면 툴팁은 일단 닫아둔다
-    setTooltipState(null);
 
     // 기존 병원 오버레이 제거
     overlayMapRef.current.forEach((ov) => ov.setMap(null));
@@ -318,22 +365,7 @@ export function MapView({
       container.appendChild(inner);
 
       container.onclick = () => {
-        // 1) 상위에 선택 이벤트 전달 (카드와 동기화)
-        onMarkerSelect?.(h.hpid);
-
-        // 2) Kakao projection으로 화면 좌표 계산 → 툴팁/하이라이트 위치
-        try {
-          const projection = map.getProjection();
-          const point = projection.fromLatLngToContainerPoint(pos);
-
-          setTooltipState({
-            hospital: h,
-            position: { x: point.x, y: point.y },
-          });
-        } catch (e) {
-          console.error('marker click projection error', e);
-          setTooltipState(null);
-        }
+        void handleMarkerClick(h);
       };
 
       const overlay = new kakao.maps.CustomOverlay({
@@ -345,7 +377,7 @@ export function MapView({
       overlay.setMap(map);
       overlayMapRef.current.set(h.hpid, overlay);
     });
-  }, [hospitals, onMarkerSelect]);
+  }, [hospitals]); // onMarkerSelect는 ref로 처리
 
   // 카드 선택 시 해당 병원 마커로 부드럽게 이동
   useEffect(() => {
@@ -425,6 +457,7 @@ export function MapView({
             const phone =
               hospital.telEmergency ?? hospital.tel_emergency ?? undefined;
             const address = hospital.addrRoad ?? hospital.address ?? undefined;
+            const hvecCount = erCache.get(hospital.hpid);
 
             return (
               <MarkerTooltip
@@ -438,8 +471,7 @@ export function MapView({
                     ? Math.max(0, Math.round(hospital.hli.lagSec / 60))
                     : 0
                 }
-                // TODO: hvecCount / WARN 데이터는 추후 HospitalListItem에 붙으면 여기서 채워 넣기
-                hvecCount={undefined}
+                hvecCount={hvecCount}
                 warnMessage={undefined}
                 variant={
                   hospital.hli.staleLevel === 'HARD' ? 'gray' : 'default'

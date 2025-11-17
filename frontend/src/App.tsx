@@ -1,6 +1,6 @@
 // src/App.tsx
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { TopAppHeader } from './components/TopAppHeader';
 import { TopSubline } from './components/TopSubline';
 import { MapView } from './components/MapView';
@@ -50,6 +50,27 @@ type CardModel = {
 };
 
 const DEFAULT_RADIUS_KM = 15;
+
+/** 두 좌표 사이의 거리를 미터 단위로 계산 (하버사인) */
+function distanceMeters(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): number {
+  const R = 6371000; // m
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLon = ((b.lon - a.lon) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLon = Math.sin(dLon / 2);
+
+  const harv =
+    sinDLat * sinDLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinDLon * sinDLon;
+
+  return 2 * R * Math.asin(Math.sqrt(harv));
+}
 
 /** CardModel 형태인지 검사하는 타입가드 */
 function isCardModel(x: unknown): x is CardModel {
@@ -123,9 +144,27 @@ export default function App() {
   const [opened, setOpened] = useState(false);
   const [geoOverlayClosed, setGeoOverlayClosed] = useState(false);
 
+  // ⭐ TMAP 호출을 위한 이전 origin 캐시 (100m 이하 움직임이면 재호출 스킵)
+  const prevOriginRef = useRef<{ lat: number; lon: number } | null>(null);
+
   useEffect(() => {
     (async () => {
       if (!coords) return;
+
+      // ---- 100m 이하 이동이면 전체 재요청 스킵 (TMAP 포함) ----
+      const prev = prevOriginRef.current;
+      if (prev) {
+        const moved = distanceMeters(prev, coords);
+        if (moved < 100) {
+          console.debug(
+            '[App] origin moved',
+            moved.toFixed(1),
+            'm (< 100m). Skip nearby + TMAP recompute.',
+          );
+          return;
+        }
+      }
+      prevOriginRef.current = coords;
 
       const center = `${coords.lat},${coords.lon}`;
       const nearby = await Api.listNearby(center, radiusKm);

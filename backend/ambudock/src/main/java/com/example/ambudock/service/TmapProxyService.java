@@ -23,7 +23,7 @@ import java.util.Map;
  * - 후보 병원 K(≤10)에 대해 TMAP OpenAPI 를 직접 호출해서
  *   차량/도보 ETA, 경로거리(route_*_km), 직선거리(distance_line_km)를 계산
  * - 실패(타임아웃/오류/400 등) 시, 직선거리 기반 추정치(source="ESTIMATE")로 대체
- * - 결과는 @Cacheable("eta")로 120초 캐시 (TTL은 CacheConfig에서 설정)
+ * - 결과는 @Cacheable("eta")로 짧은 TTL(예: 30~60초) 캐시 (TTL은 CacheConfig에서 설정)
  */
 @Slf4j
 @Service
@@ -70,20 +70,74 @@ public class TmapProxyService {
         }
     }
 
+    /* ---------------- Cache key helper ---------------- */
+
+    /**
+     * 같은 origin + 후보 K(hpids) + 옵션(car/walk) 조합에 대해
+     * 캐시가 재사용되도록 정규화한 문자열 키를 만든다.
+     *
+     * - 후보는 hpid 기준으로 정렬해서 순서에 영향을 받지 않도록 함.
+     * - lat/lon 은 BigDecimal.toPlainString() 으로 안정적인 문자열화.
+     */
+    public static String cacheKeyForReq(TmapDtos.RouteRequest req) {
+        if (req == null) return "NULL";
+
+        String origin = req.getOrigin() == null ? "" : req.getOrigin().trim();
+        StringBuilder sb = new StringBuilder(origin).append('|');
+
+        List<TmapDtos.RouteRequest.Candidate> candidates = req.getCandidates();
+        if (candidates != null && !candidates.isEmpty()) {
+            List<TmapDtos.RouteRequest.Candidate> copy = new ArrayList<>(candidates);
+            copy.sort((a, b) -> {
+                String ha = a.getHpid() == null ? "" : a.getHpid();
+                String hb = b.getHpid() == null ? "" : b.getHpid();
+                int cmp = ha.compareTo(hb);
+                if (cmp != 0) return cmp;
+
+                BigDecimal la = a.getLat();
+                BigDecimal lb = b.getLat();
+                if (la != null && lb != null) {
+                    cmp = la.compareTo(lb);
+                    if (cmp != 0) return cmp;
+                }
+
+                BigDecimal lona = a.getLon();
+                BigDecimal lonb = b.getLon();
+                if (lona != null && lonb != null) {
+                    cmp = lona.compareTo(lonb);
+                }
+                return cmp;
+            });
+
+            for (TmapDtos.RouteRequest.Candidate c : copy) {
+                sb.append(c.getHpid() == null ? "" : c.getHpid())
+                        .append(':')
+                        .append(c.getLat() == null ? "" : c.getLat().toPlainString())
+                        .append(',')
+                        .append(c.getLon() == null ? "" : c.getLon().toPlainString())
+                        .append(';');
+            }
+        }
+
+        sb.append('|');
+        boolean car = req.getOptions() == null || Boolean.TRUE.equals(req.getOptions().isCar());
+        boolean walk = req.getOptions() == null || Boolean.TRUE.equals(req.getOptions().isWalk());
+        sb.append(car).append(',').append(walk);
+
+        return sb.toString();
+    }
+
     /* ---------------- Public API ---------------- */
 
     /**
      * 후보 K 병원에 대한 차량/도보 ETA와 거리 요청
-     * - 캐시 키: origin + candidates + 옵션(car/walk)을 문자열로 묶어 MD5 (동일 입력 120s 재사용)
+     * - 캐시 키: origin + 후보K(hpids/좌표) + 옵션(car/walk)을 문자열로 정규화 → MD5
      * - TMAP OpenAPI 정상 응답이면 source="TMAP", 모두 실패하면 ESTIMATE 폴백
      */
     @Cacheable(
             cacheNames = "eta",
-            key = "T(org.springframework.util.DigestUtils).md5DigestAsHex((" +
-                    "#req.origin + '|' + " +
-                    "#req.candidates.![hpid + ':' + lat + ',' + lon].toString() + '|' + " +
-                    "(#req.options != null ? (#req.options.car + ',' + #req.options.walk) : 'true,true')" +
-                    ").bytes)"
+            key = "T(org.springframework.util.DigestUtils).md5DigestAsHex(" +
+                    "T(com.example.ambudock.service.TmapProxyService).cacheKeyForReq(#req).bytes)"
     )
     public TmapDtos.RouteResponse routeForCandidates(TmapDtos.RouteRequest req, String clientIp) {
         // 1) 입력 형식 방어: origin은 "lat,lon" 형태여야 함
@@ -181,7 +235,7 @@ public class TmapProxyService {
                 .items(items)
                 .durationMs(durationMs)
                 .source("TMAP")
-                .cached(0)
+                .cached(0) // 캐시 여부는 Cache 레이어에서 관리 (필요하면 나중에 필드로 구분)
                 .build();
     }
 
