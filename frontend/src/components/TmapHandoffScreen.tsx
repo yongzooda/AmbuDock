@@ -33,22 +33,42 @@ export function TmapHandoffScreen({
       );
 
       // 기본 딥링크: 목적지 이름
-      let url = `tmap://route?goalname=${encodedName}`;
+      let deepLink = `tmap://route?goalname=${encodedName}`;
 
       // 위경도가 있으면 좌표까지 포함해서 길안내
       if (typeof lat === 'number' && typeof lon === 'number') {
-        url += `&goalx=${lon}&goaly=${lat}`;
+        // TMAP 스펙: goalx = 경도, goaly = 위도
+        deepLink += `&goalx=${lon}&goaly=${lat}`;
       }
 
       const ua = window.navigator.userAgent || '';
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(ua);
+      const isAndroid = /Android/i.test(ua);
+      const isIOS = /iPhone|iPad|iPod/i.test(ua);
 
-      if (isMobile) {
-        window.location.href = url;
-      } else {
-        // 데스크톱 개발 환경에서는 콘솔로만 확인
-        console.info('[TMAP] deep link (desktop):', url);
+      // 모바일이 아니면(데스크톱 개발 환경) 콘솔만 찍고 종료
+      if (!isAndroid && !isIOS) {
+        console.info('[TMAP] deep link (desktop):', deepLink);
+        return;
       }
+
+      // 스토어 URL (앱 미설치 시 fallback)
+      const androidStoreUrl =
+        'https://play.google.com/store/apps/details?id=com.skt.tmap.ku';
+      const iosStoreUrl = 'https://apps.apple.com/app/id431589174';
+      const storeUrl = isAndroid ? androidStoreUrl : iosStoreUrl;
+
+      const start = Date.now();
+
+      // 1) TMAP 딥링크 시도
+      window.location.href = deepLink;
+
+      // 2) 짧은 시간 안에 브라우저가 그대로면 → 앱 미설치로 보고 스토어로 fallback
+      setTimeout(() => {
+        const elapsed = Date.now() - start;
+        if (elapsed < 1500) {
+          window.location.href = storeUrl;
+        }
+      }, 1200);
     } catch (e) {
       console.error('[TMAP] deep link 실패', e);
     }
@@ -59,7 +79,7 @@ export function TmapHandoffScreen({
 
     setIsLoading(true);
 
-    // 1) TMAP 딥링크 시도
+    // 1) TMAP 딥링크 + 스토어 fallback 시도
     openTmapDeepLink();
 
     // 2) UI 상태 전환 (로딩 → 상위에서 오버레이 표시)
@@ -121,7 +141,7 @@ export function TmapHandoffScreen({
             </div>
 
             <div
-              className="mb-6 px-4 py-3 rounded-2xl"
+              className="mb-6 rounded-2xl px-4 py-3"
               style={{
                 background: 'rgba(255, 255, 255, 0.15)',
                 backdropFilter: 'blur(10px)',
@@ -154,10 +174,10 @@ export function TmapHandoffScreen({
         </div>
 
         {/* Bottom buttons - 항상 하단 고정 */}
-        <div className="w-full px-6 pb-8 space-y-3">
+        <div className="w-full space-y-3 px-6 pb-8">
           {/* Primary button - 확인 */}
           <button
-            className="w-full px-6 py-4 rounded-xl transition-all"
+            className="w-full rounded-xl px-6 py-4 transition-all"
             style={{
               background: '#FFFFFF',
               color: '#1E40AF',
@@ -171,7 +191,7 @@ export function TmapHandoffScreen({
           >
             {isLoading ? (
               <div className="flex items-center justify-center gap-2">
-                <Loader2 className="w-5 h-5 animate-spin" />
+                <Loader2 className="h-5 w-5 animate-spin" />
                 <span>이동 중…</span>
               </div>
             ) : (
@@ -181,7 +201,7 @@ export function TmapHandoffScreen({
 
           {/* Secondary button - 돌아가기 */}
           <button
-            className="w-full px-6 py-4 rounded-xl transition-all"
+            className="w-full rounded-xl px-6 py-4 transition-all"
             style={{
               background: 'rgba(255, 255, 255, 0.2)',
               color: '#FFFFFF',
