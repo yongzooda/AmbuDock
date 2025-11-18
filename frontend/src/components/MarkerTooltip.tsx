@@ -24,6 +24,8 @@ type MarkerTooltipProps = {
     right: number;
     bottom: number;
   };
+  /** 닫기 버튼 / 지도 클릭으로 툴팁을 닫을 때 사용할 콜백 */
+  onClose?: () => void;
 };
 
 const levelStyles = {
@@ -45,6 +47,7 @@ export function MarkerTooltip({
   variant = 'default',
   position,
   containerBounds,
+  onClose,
 }: MarkerTooltipProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<Placement>('top');
@@ -60,10 +63,9 @@ export function MarkerTooltip({
     const tooltipRect = tooltipRef.current.getBoundingClientRect();
     const tooltipWidth = tooltipRect.width || 0;
     const tooltipHeight = tooltipRect.height || 0;
-    const offset = 14;
+    const offset = 10;
 
-    // ✅ containerBounds 가 아직 없거나 값이 이상하면
-    //    위치 보정하지 않고 그대로 사용
+    // containerBounds 가 아직 없거나 값이 이상하면 위치 보정하지 않음
     if (
       !containerBounds ||
       containerBounds.right <= containerBounds.left ||
@@ -95,12 +97,11 @@ export function MarkerTooltip({
     setAdjustedPosition({ x: finalX, y: finalY });
   }, [position, containerBounds]);
 
-  const offset = 14;
+  const offset = 10;
   const isBottom = placement === 'bottom';
 
   return (
     <div
-      ref={tooltipRef}
       className="absolute z-30 pointer-events-none"
       style={{
         left: `${adjustedPosition.x}px`,
@@ -115,37 +116,38 @@ export function MarkerTooltip({
           <div
             className="absolute left-1/2 -translate-x-1/2"
             style={{
-              top: '-6px',
+              top: '-5px',
               width: 0,
               height: 0,
-              borderLeft: '6px solid transparent',
-              borderRight: '6px solid transparent',
-              borderBottom: '6px solid #FFFFFF',
+              borderLeft: '5px solid transparent',
+              borderRight: '5px solid transparent',
+              borderBottom: '5px solid #FFFFFF',
             }}
           />
           <div
             className="absolute left-1/2 -translate-x-1/2"
             style={{
-              top: '-7px',
+              top: '-6px',
               width: 0,
               height: 0,
-              borderLeft: '7px solid transparent',
-              borderRight: '7px solid transparent',
-              borderBottom: '7px solid #E5E7EB',
+              borderLeft: '6px solid transparent',
+              borderRight: '6px solid transparent',
+              borderBottom: '6px solid #E5E7EB',
               zIndex: -1,
             }}
           />
         </>
       )}
 
-      {/* Tooltip card */}
+      {/* Tooltip card (여기만 클릭 가능) */}
       <div
-        className="relative rounded-lg p-3 shadow-lg"
+        ref={tooltipRef}
+        className="relative rounded-md p-2.5 shadow-lg pointer-events-auto"
         style={{
           background: '#FFFFFF',
           border: '1px solid #E5E7EB',
-          minWidth: '200px',
-          maxWidth: '260px',
+          minWidth: '160px',
+          maxWidth: '200px',
         }}
         role="tooltip"
         aria-label={`${hospitalName}${
@@ -154,14 +156,38 @@ export function MarkerTooltip({
           hvecCount !== undefined ? `, 가용 응급실 병상수 ${hvecCount}개` : ''
         }`}
       >
+        {/* 닫기 버튼 */}
+        {onClose && (
+          <button
+            type="button"
+            className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center hover:bg-gray-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            aria-label="툴팁 닫기"
+          >
+            <span
+              style={{
+                fontSize: '12px',
+                fontWeight: 700,
+                color: '#6B7280',
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </span>
+          </button>
+        )}
+
         {/* 병원 이름 + 레벨 아이콘 */}
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-1.5 flex items-center gap-1.5 pr-4">
           <HospitalMarker
             level={level}
             isStale={isGray}
-            style={{ transform: 'scale(0.9)' }}
+            style={{ transform: 'scale(0.8)' }}
           />
-          <div style={{ fontSize: '16px', fontWeight: 700 }}>
+          <div style={{ fontSize: '14px', fontWeight: 600 }}>
             {hospitalName}
           </div>
         </div>
@@ -169,19 +195,16 @@ export function MarkerTooltip({
         {/* WARN 배지 */}
         {showWarn && (
           <div
-            className="mb-2 px-2 py-1 rounded-md inline-flex items-center gap-1.5"
+            className="mb-1.5 px-1.5 py-0.5 rounded-md inline-flex items-center gap-1"
             style={{
               background: '#FFF7ED',
               color: '#C2410C',
               fontWeight: 600,
-              fontSize: '13px',
+              fontSize: '11px',
               border: '1px solid #FED7AA',
             }}
           >
-            <AlertTriangle
-              className="w-3.5 h-3.5"
-              style={{ strokeWidth: 2.5 }}
-            />
+            <AlertTriangle className="w-3 h-3" style={{ strokeWidth: 2.3 }} />
             <span>WARN: {warnMessage}</span>
           </div>
         )}
@@ -189,8 +212,8 @@ export function MarkerTooltip({
         {/* 전화번호 */}
         {phone && (
           <div
-            className="mb-1"
-            style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280' }}
+            className="mb-0.5"
+            style={{ fontSize: '12px', fontWeight: 500, color: '#6B7280' }}
           >
             전화 {phone}
           </div>
@@ -199,9 +222,9 @@ export function MarkerTooltip({
         {/* 주소 */}
         {address && (
           <div
-            className="mb-2"
+            className="mb-1.5"
             style={{
-              fontSize: '14px',
+              fontSize: '12px',
               fontWeight: 500,
               color: '#6B7280',
               wordWrap: 'break-word',
@@ -212,7 +235,7 @@ export function MarkerTooltip({
         )}
 
         {/* HLI 상태 */}
-        <div className="mb-1" style={{ fontSize: '14px', fontWeight: 600 }}>
+        <div className="mb-0.5" style={{ fontSize: '13px', fontWeight: 600 }}>
           <span>HLI {hli}</span>
           <span> · </span>
           <span style={{ color: levelStyle.color }}>{level}</span>
@@ -225,8 +248,8 @@ export function MarkerTooltip({
         {/* ER 가용 수 */}
         {hvecCount !== undefined && (
           <div
-            className="mb-1"
-            style={{ fontSize: '14px', fontWeight: 500, color: '#6B7280' }}
+            className="mb-0.5"
+            style={{ fontSize: '12px', fontWeight: 500, color: '#6B7280' }}
             aria-label={`가용 응급실 병상수 ${hvecCount}개`}
           >
             가용 응급실 병상수(ER 가용수) {hvecCount}개
@@ -240,23 +263,23 @@ export function MarkerTooltip({
           <div
             className="absolute left-1/2 -translate-x-1/2"
             style={{
-              bottom: '-6px',
+              bottom: '-5px',
               width: 0,
               height: 0,
-              borderLeft: '6px solid transparent',
-              borderRight: '6px solid transparent',
-              borderTop: '6px solid #FFFFFF',
+              borderLeft: '5px solid transparent',
+              borderRight: '5px solid transparent',
+              borderTop: '5px solid #FFFFFF',
             }}
           />
           <div
             className="absolute left-1/2 -translate-x-1/2"
             style={{
-              bottom: '-7px',
+              bottom: '-6px',
               width: 0,
               height: 0,
-              borderLeft: '7px solid transparent',
-              borderRight: '7px solid transparent',
-              borderTop: '7px solid #E5E7EB',
+              borderLeft: '6px solid transparent',
+              borderRight: '6px solid transparent',
+              borderTop: '6px solid #E5E7EB',
               zIndex: -1,
             }}
           />
