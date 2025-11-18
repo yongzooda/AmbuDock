@@ -47,6 +47,8 @@ type CardModel = {
     hv6: number;
     hvoc: number;
   }>;
+  lat: number; // ✅ TMAP 딥링크용 좌표
+  lon: number;
 };
 
 const DEFAULT_RADIUS_KM = 15;
@@ -86,14 +88,17 @@ function isCardModel(x: unknown): x is CardModel {
 /** 외부에서 받은 값을 CardModel로 정규화 (any 금지, unknown 사용) */
 function normalizeCard(c: unknown): CardModel {
   if (isCardModel(c)) {
+    const card = c as CardModel;
     return {
-      ...c,
+      ...card,
       // null → undefined로 정규화(표시 생략)
-      freshness: c.freshness === null ? undefined : c.freshness,
-      walkMin: c.walkMin ?? 0,
-      carMin: c.carMin ?? 0,
-      erAvailable: c.erAvailable ?? 0,
-      icuAvailTotal: c.icuAvailTotal ?? 0,
+      freshness: card.freshness === null ? undefined : card.freshness,
+      walkMin: card.walkMin ?? 0,
+      carMin: card.carMin ?? 0,
+      erAvailable: card.erAvailable ?? 0,
+      icuAvailTotal: card.icuAvailTotal ?? 0,
+      lat: card.lat ?? 0,
+      lon: card.lon ?? 0,
     };
   }
   // HospitalListItem처럼 보이면 기본 매핑
@@ -122,6 +127,8 @@ function normalizeCard(c: unknown): CardModel {
     address: String(h?.addrRoad ?? ''),
     erAvailable: 0,
     icuAvailTotal: 0,
+    lat: Number(h?.lat ?? 0),
+    lon: Number(h?.lon ?? 0),
   };
 }
 
@@ -137,7 +144,12 @@ export default function App() {
   const [detail, setDetail] = useState<{ open: boolean; card?: CardModel }>({
     open: false,
   });
-  const [handoff, setHandoff] = useState<{ open: boolean; name?: string }>({
+  const [handoff, setHandoff] = useState<{
+    open: boolean;
+    name?: string;
+    lat?: number;
+    lon?: number;
+  }>({
     open: false,
   });
   const [opened, setOpened] = useState(false);
@@ -217,6 +229,8 @@ export default function App() {
         address: h.addrRoad || '',
         erAvailable: 0,
         icuAvailTotal: 0,
+        lat: h.lat,
+        lon: h.lon,
       }));
       setCards(skeleton);
 
@@ -341,7 +355,12 @@ export default function App() {
           }}
           onStartNavigation={(raw) => {
             const card = normalizeCard(raw);
-            setHandoff({ open: true, name: card.name });
+            setHandoff({
+              open: true,
+              name: card.name,
+              lat: card.lat,
+              lon: card.lon,
+            });
           }}
         />
       </div>
@@ -362,7 +381,12 @@ export default function App() {
         warnMessage={detail.card?.warnMessage}
         onStartNavigation={() => {
           setDetail({ open: false });
-          setHandoff({ open: true, name: detail.card?.name });
+          setHandoff({
+            open: true,
+            name: detail.card?.name,
+            lat: detail.card?.lat,
+            lon: detail.card?.lon,
+          });
         }}
         onCall={() => {
           if (detail.card?.phone) {
@@ -374,6 +398,8 @@ export default function App() {
       <TmapHandoffScreen
         isOpen={handoff.open}
         hospitalName={handoff.name || ''}
+        lat={handoff.lat}
+        lon={handoff.lon}
         onBack={() => setHandoff({ open: false })}
         onConfirm={() => {
           setHandoff({ open: false });
