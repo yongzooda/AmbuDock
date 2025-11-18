@@ -155,6 +155,11 @@ export default function App() {
   const [opened, setOpened] = useState(false);
   const [geoOverlayClosed, setGeoOverlayClosed] = useState(false);
 
+  // ⭐ UA 기반 OS 판별 (오버레이 안내문용)
+  const ua = typeof window !== 'undefined' ? window.navigator.userAgent : '';
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+
   // ⭐ TMAP 호출을 위한 이전 origin 캐시 (100m 이하 움직임이면 재호출 스킵)
   const prevOriginRef = useRef<{ lat: number; lon: number } | null>(null);
 
@@ -298,6 +303,18 @@ export default function App() {
 
   const isGeoOverlayOpen = !!geoError && !geoOverlayClosed;
 
+  // ⭐ 위치 오류 안내 메시지 (OS별 분기)
+  const geoMessage =
+    geoError === 'DENIED'
+      ? isIOS
+        ? 'iPhone 설정 앱 → Safari → 위치에서 "허용" 또는 "앱 사용 중에 허용"으로 변경한 뒤,\n이 페이지를 다시 새로고침해 주세요.'
+        : isAndroid
+        ? '브라우저 설정 → 위치에서 권한을 "허용"으로 변경한 뒤,\n페이지를 다시 새로고침해 주세요.'
+        : '브라우저 위치 설정에서 권한을 허용한 뒤,\n페이지를 다시 새로고침해 주세요.'
+      : geoError === 'GEO_UNSUPPORTED'
+      ? '이 브라우저에서는 위치 정보를 지원하지 않아,\n예시 화면으로만 확인할 수 있어요.'
+      : '위치 정보를 불러오는 중 문제가 발생했어요.\n잠시 후 다시 시도해 주세요.';
+
   return (
     <>
       <TopAppHeader />
@@ -416,13 +433,7 @@ export default function App() {
             ? '위치 권한이 필요합니다'
             : '현재 위치를 가져올 수 없어요'
         }
-        message={
-          geoError === 'DENIED'
-            ? '주변 응급실을 추천하려면 브라우저 위치 권한을 허용해 주세요.'
-            : geoError === 'GEO_UNSUPPORTED'
-            ? '이 브라우저에서는 위치 정보를 지원하지 않아, 예시 화면으로만 확인할 수 있어요.'
-            : '위치 정보를 불러오는 중 문제가 발생했어요. 잠시 후 다시 시도해 주세요.'
-        }
+        message={geoMessage}
       />
     </>
   );
