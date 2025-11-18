@@ -232,10 +232,15 @@ export default function App() {
       const merged: CardModel[] = skeleton.map((c) => {
         const r = etaMap.get(c.id);
         const nextState: CardState = c.state === 'gray' ? 'gray' : 'default';
+
+        const car = r?.eta_car_min;
+        const walk = r?.eta_walk_min;
+
         return {
           ...c,
-          carMin: r?.eta_car_min ?? 0,
-          walkMin: r?.eta_walk_min ?? 0,
+          // ✅ 여기서 반올림해서 CardModel에 저장
+          carMin: typeof car === 'number' ? Math.round(car) : 0,
+          walkMin: typeof walk === 'number' ? Math.round(walk) : 0,
           state: nextState,
         };
       });

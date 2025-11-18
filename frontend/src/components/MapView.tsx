@@ -44,7 +44,6 @@ declare global {
   }
 
   interface KakaoMapProjection {
-    // ✅ 카카오 지도: containerPointFromCoords 가 정식 메서드
     containerPointFromCoords(latlng: KakaoLatLng): KakaoPoint;
   }
 
@@ -62,6 +61,14 @@ declare global {
     setPosition?(latlng: KakaoLatLng): void;
   }
 
+  interface KakaoMapsEvent {
+    addListener(
+      target: KakaoMap | KakaoCustomOverlay | HTMLElement,
+      type: string,
+      handler: (...args: unknown[]) => void
+    ): void;
+  }
+
   interface KakaoMapsNamespace {
     LatLng: new (lat: number, lng: number) => KakaoLatLng;
     LatLngBounds: new () => KakaoLatLngBounds;
@@ -74,6 +81,7 @@ declare global {
       yAnchor?: number;
       content: HTMLElement;
     }) => KakaoCustomOverlay;
+    event: KakaoMapsEvent;
     load(callback: () => void): void;
   }
 
@@ -109,7 +117,7 @@ export function MapView({
   );
   const myLocationOverlayRef = useRef<KakaoCustomOverlay | null>(null);
 
-  // ✅ 지도 준비 여부 플래그
+  // 지도 준비 여부 플래그
   const [mapReady, setMapReady] = useState(false);
 
   // onMarkerSelect를 ref로 보관해서 effect 의존성에서 제거
@@ -233,7 +241,7 @@ export function MapView({
     }
   };
 
-  // ✅ Kakao SDK 로드 + 지도 초기화 (한 번만)
+  // Kakao SDK 로드 + 지도 초기화 (한 번만)
   useEffect(() => {
     const scriptId = 'kakao-map-sdk';
 
@@ -249,7 +257,15 @@ export function MapView({
       });
 
       mapInstanceRef.current = map;
-      setMapReady(true); // ✅ 지도 준비 완료
+
+      // 지도의 아무 곳이나 클릭하면 툴팁 닫기
+      if (window.kakao.maps.event) {
+        window.kakao.maps.event.addListener(map, 'click', () => {
+          setTooltipState(null);
+        });
+      }
+
+      setMapReady(true);
     };
 
     // 이미 kakao.maps 가 있으면 바로 load
@@ -305,13 +321,12 @@ export function MapView({
     const pos = new kakao.maps.LatLng(h.lat, h.lon);
     const projection = map.getProjection();
 
-    // ✅ 카카오: containerPointFromCoords 사용
     const point = projection.containerPointFromCoords(pos);
 
     // 카드/Top3와 동기화
     onMarkerSelectRef.current?.(h.hpid);
 
-    // 툴팁은 바로 띄움(ER 가용수는 나중에 채워져도 됨)
+    // 툴팁은 바로 띄움
     setTooltipState({
       hospital: h,
       position: { x: point.x, y: point.y },
@@ -382,7 +397,7 @@ export function MapView({
       overlay.setMap(map);
       overlayMapRef.current.set(h.hpid, overlay);
     });
-  }, [hospitals, mapReady]); // ✅ mapReady 의존성 추가
+  }, [hospitals, mapReady]);
 
   // 카드 선택 시 해당 병원 마커로 부드럽게 이동
   useEffect(() => {
@@ -483,6 +498,7 @@ export function MapView({
                 }
                 position={tooltipState.position}
                 containerBounds={tooltipBounds}
+                onClose={() => setTooltipState(null)}
               />
             );
           })()}

@@ -37,30 +37,33 @@ export function BottomCardBar({
   onStartNavigation,
 }: BottomCardBarProps) {
   return (
-    <div 
-      className="w-full bg-white flex flex-col overflow-y-auto"
-      style={{ 
-        height: '40%',
-        minHeight: '320px',
+    <div
+      className="
+        w-full bg-white flex flex-col overflow-y-auto
+        h-[24vh] min-h-[210px]
+        sm:h-[26vh] sm:min-h-[220px]
+        md:h-[30vh] md:min-h-[250px]
+      "
+      style={{
         borderTopLeftRadius: '20px',
         borderTopRightRadius: '20px',
-        padding: '12px',
+        padding: '8px 12px 10px',
       }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between mb-3 px-1">
-        <span style={{ fontSize: '16px', fontWeight: 600 }}>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <span style={{ fontSize: '15px', fontWeight: 600 }}>
           현재 추천 Top3
         </span>
-        <span style={{ fontSize: '12px', fontWeight: 500, color: '#6B7280' }}>
+        <span style={{ fontSize: '11px', fontWeight: 500, color: '#6B7280' }}>
           실시간 갱신 60~180초
         </span>
       </div>
 
       {/* Cards */}
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2.5">
         {hospitals.map((hospital) => (
-          <HospitalCard 
+          <HospitalCard
             key={hospital.id}
             rank={hospital.rank}
             name={hospital.name}
