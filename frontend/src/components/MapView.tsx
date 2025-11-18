@@ -103,6 +103,8 @@ const levelColors: Record<HliLevel, string> = {
 
 // 지도에서 기본 반경(병원 검색 반경과 맞춤)
 const DEFAULT_RADIUS_KM = 15;
+// 카드 선택 시 포커스할 반경
+const FOCUS_RADIUS_KM = 1;
 
 export function MapView({
   coords,
@@ -119,6 +121,9 @@ export function MapView({
 
   // 지도 준비 여부 플래그
   const [mapReady, setMapReady] = useState(false);
+
+  // 카드 선택 시 지도 중앙에 잠깐 보여줄 하이라이트 링
+  const [cardHighlightCenter, setCardHighlightCenter] = useState(false);
 
   // onMarkerSelect를 ref로 보관해서 effect 의존성에서 제거
   const onMarkerSelectRef = useRef<MapViewProps['onMarkerSelect'] | undefined>(
@@ -200,7 +205,7 @@ export function MapView({
   };
 
   /**
-   * 내 위치를 중심으로 반경 15km가 보이도록 지도 bounds 맞추기
+   * 특정 중심(lat, lon)을 기준으로 radiusKm 반경이 보이도록 지도 bounds 맞추기
    */
   const fitMapToRadius = (
     kakaoMaps: KakaoMapsNamespace,
@@ -216,7 +221,7 @@ export function MapView({
 
     // 경도는 위도에 따라 달라짐
     const rad = (lat * Math.PI) / 180;
-    const kmPerLonDegree = 111 * Math.cos(rad);
+    const kmPerLonDegree = 111 * Math.cos(rad || 0.00001);
     const deltaLon = radiusKm / kmPerLonDegree;
 
     const south = lat - deltaLat;
@@ -309,7 +314,7 @@ export function MapView({
     const { lat, lon } = coords;
 
     updateMyLocationOverlay(kakao.maps, map, lat, lon);
-    fitMapToRadius(kakao.maps, map, lat, lon);
+    fitMapToRadius(kakao.maps, map, lat, lon, DEFAULT_RADIUS_KM);
   }, [coords]);
 
   // 병원 마커 클릭 시 처리: 카드 선택 + 툴팁 위치 + ER 가용수 로딩
@@ -399,20 +404,29 @@ export function MapView({
     });
   }, [hospitals, mapReady]);
 
-  // 카드 선택 시 해당 병원 마커로 부드럽게 이동
+  /**
+   * 카드/Top3에서 병원이 선택되면:
+   *  - 해당 병원 중심으로 반경 3km가 보이도록 줌
+   *  - 지도 중앙에 하이라이트 링을 잠깐 표시
+   */
   useEffect(() => {
     const kakao = window.kakao;
     const map = mapInstanceRef.current;
     if (!kakao?.maps || !map || !selectedHospitalId) return;
 
-    const overlay = overlayMapRef.current.get(selectedHospitalId);
-    if (!overlay || !overlay.getPosition) return;
+    const target = hospitals.find((h) => h.hpid === selectedHospitalId);
+    if (!target) return;
 
-    const pos = overlay.getPosition();
-    if (pos) {
-      map.panTo(pos);
-    }
-  }, [selectedHospitalId]);
+    fitMapToRadius(kakao.maps, map, target.lat, target.lon, FOCUS_RADIUS_KM);
+
+    // 중앙 하이라이트를 잠깐 켰다가 끄기 (깜빡임 효과)
+    setCardHighlightCenter(true);
+    const timeoutId = window.setTimeout(() => {
+      setCardHighlightCenter(false);
+    }, 1200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [selectedHospitalId, hospitals]);
 
   // 현위치 버튼: 내 위치 + 반경 15km로 다시 맞추기
   const handleRecenter = () => {
@@ -423,7 +437,7 @@ export function MapView({
     const { lat, lon } = coords;
 
     updateMyLocationOverlay(kakao.maps, map, lat, lon);
-    fitMapToRadius(kakao.maps, map, lat, lon);
+    fitMapToRadius(kakao.maps, map, lat, lon, DEFAULT_RADIUS_KM);
   };
 
   // 툴팁이 사용할 컨테이너 경계 (맵 영역 크기 기준)
@@ -457,6 +471,19 @@ export function MapView({
       >
         <Crosshair className="w-6 h-6" style={{ color: '#111827' }} />
       </button>
+
+      {/* 카드 선택 시 지도 중앙 하이라이트 (줌과 함께) */}
+      {cardHighlightCenter && (
+        <MarkerHighlight
+          style={{
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            pointerEvents: 'none',
+            zIndex: 20,
+          }}
+        />
+      )}
 
       {/* 선택된 마커 하이라이트 + 툴팁 */}
       {tooltipState && (
