@@ -1,13 +1,24 @@
 /* src/index.css */
 
-@import "./styles/globals.css";  
+@import "./styles/globals.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ✅ 시스템이 다크모드여도 우리 앱은 라이트 모드 기준 */
+:root {
+  color-scheme: light;
+}
+
+/* ✅ 전체 높이 + 라이트 배경/텍스트 색 강제 */
 html,
 body,
 #root {
   height: 100%;
+}
+
+body {
+  background-color: #f9fafb; /* Tailwind gray-50 정도 */
+  color: #111827;           /* Tailwind gray-900 정도 */
 }

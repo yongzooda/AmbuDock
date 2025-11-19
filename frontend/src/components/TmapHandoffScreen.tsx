@@ -2,13 +2,20 @@
 
 import { Navigation, Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import {
+  openTmapNavigation,
+  isAndroid,
+  isIOS,
+  TMAP_ANDROID_STORE_LINK,
+  TMAP_IOS_STORE_LINK,
+} from '../lib/tmap';
 
 type TmapHandoffScreenProps = {
   isOpen: boolean;
   hospitalName: string;
   lat?: number; // 목적지 위도
   lon?: number; // 목적지 경도
-  onConfirm: () => void;
+  onConfirm: () => void; // 상위(App.tsx)에서 오버레이 열기 등 처리
   onBack: () => void;
 };
 
@@ -24,69 +31,42 @@ export function TmapHandoffScreen({
 
   if (!isOpen) return null;
 
-  const openTmapDeepLink = () => {
-    if (typeof window === 'undefined') return;
-
-    try {
-      const encodedName = encodeURIComponent(
-        hospitalName && hospitalName.length > 0 ? hospitalName : '목적지'
-      );
-
-      // 기본 딥링크: 목적지 이름
-      let deepLink = `tmap://route?goalname=${encodedName}`;
-
-      // 위경도가 있으면 좌표까지 포함해서 길안내
-      if (typeof lat === 'number' && typeof lon === 'number') {
-        // TMAP 스펙: goalx = 경도, goaly = 위도
-        deepLink += `&goalx=${lon}&goaly=${lat}`;
-      }
-
-      const ua = window.navigator.userAgent || '';
-      const isAndroid = /Android/i.test(ua);
-      const isIOS = /iPhone|iPad|iPod/i.test(ua);
-
-      // 모바일이 아니면(데스크톱 개발 환경) 콘솔만 찍고 종료
-      if (!isAndroid && !isIOS) {
-        console.info('[TMAP] deep link (desktop):', deepLink);
-        return;
-      }
-
-      // 스토어 URL (앱 미설치 시 fallback)
-      const androidStoreUrl =
-        'https://play.google.com/store/apps/details?id=com.skt.tmap.ku';
-      const iosStoreUrl = 'https://apps.apple.com/app/id431589174';
-      const storeUrl = isAndroid ? androidStoreUrl : iosStoreUrl;
-
-      const start = Date.now();
-
-      // 1) TMAP 딥링크 시도
-      window.location.href = deepLink;
-
-      // 2) 짧은 시간 안에 브라우저가 그대로면 → 앱 미설치로 보고 스토어로 fallback
-      setTimeout(() => {
-        const elapsed = Date.now() - start;
-        if (elapsed < 1500) {
-          window.location.href = storeUrl;
-        }
-      }, 1200);
-    } catch (e) {
-      console.error('[TMAP] deep link 실패', e);
-    }
-  };
+  const uaIsAndroid = isAndroid();
+  const uaIsIOS = isIOS();
+  const storeUrl = uaIsAndroid
+    ? TMAP_ANDROID_STORE_LINK
+    : uaIsIOS
+    ? TMAP_IOS_STORE_LINK
+    : undefined;
 
   const handleConfirm = () => {
     if (isLoading) return;
 
+    // 좌표가 없으면 딥링크 없이 상위로만 알려주고 종료
+    if (typeof lat !== 'number' || typeof lon !== 'number') {
+      console.warn('[TMAP] missing lat/lon for deep link');
+      onConfirm();
+      return;
+    }
+
     setIsLoading(true);
 
-    // 1) TMAP 딥링크 + 스토어 fallback 시도
-    openTmapDeepLink();
-
-    // 2) UI 상태 전환 (로딩 → 상위에서 오버레이 표시)
+    // 살짝 로딩을 보여준 뒤 딥링크 시도
     setTimeout(() => {
+      openTmapNavigation({
+        lat,
+        lon,
+        name: hospitalName && hospitalName.length > 0 ? hospitalName : '목적지',
+      });
+
       setIsLoading(false);
-      onConfirm(); // App.tsx에서 handoff 닫고 TmapOpenedOverlay 열어줌
-    }, 800);
+      onConfirm(); // App.tsx: handoff 닫고 TmapOpenedOverlay 열기 등
+    }, 300);
+  };
+
+  const handleOpenStore = () => {
+    if (!storeUrl) return;
+    window.location.href = storeUrl;
   };
 
   return (
@@ -100,11 +80,11 @@ export function TmapHandoffScreen({
         }}
       >
         {/* Main content - centered */}
-        <div className="flex-1 flex flex-col items-center justify-center px-6">
+        <div className="flex flex-1 flex-col items-center justify-center px-6">
           {/* Large navigation icon */}
           <div className="mb-8">
             <Navigation
-              className="w-24 h-24"
+              className="h-24 w-24"
               style={{
                 color: 'rgba(255, 255, 255, 0.9)',
                 strokeWidth: 1.5,
@@ -141,7 +121,7 @@ export function TmapHandoffScreen({
             </div>
 
             <div
-              className="mb-6 rounded-2xl px-4 py-3"
+              className="mb-4 rounded-2xl px-4 py-3"
               style={{
                 background: 'rgba(255, 255, 255, 0.15)',
                 backdropFilter: 'blur(10px)',
@@ -162,20 +142,38 @@ export function TmapHandoffScreen({
             </div>
 
             <div
+              className="mb-2"
               style={{
                 fontSize: '16px',
                 fontWeight: 500,
-                color: 'rgba(255, 255, 255, 0.8)',
+                color: 'rgba(255, 255, 255, 0.9)',
               }}
             >
               TMAP으로 이동합니다.
+            </div>
+
+            {/* OS별 친절한 안내 문구 */}
+            <div
+              style={{
+                fontSize: '13px',
+                fontWeight: 400,
+                color: 'rgba(255, 255, 255, 0.8)',
+                lineHeight: 1.5,
+                whiteSpace: 'pre-line',
+              }}
+            >
+              {uaIsIOS
+                ? 'iPhone에 TMAP이 설치되어 있지 않다면\n"주소가 유효하지 않습니다" 안내가 표시될 수 있어요.\n그 경우 아래 "TMAP 설치하기" 버튼을 눌러\nApp Store에서 설치해 주세요.'
+                : uaIsAndroid
+                ? 'TMAP이 설치되어 있지 않다면\n길안내가 바로 열리지 않을 수 있어요.\n그 경우 아래 "TMAP 설치하기" 버튼을 눌러\nPlay 스토어에서 설치해 주세요.'
+                : '모바일 환경에서 TMAP 앱이 설치되어 있어야\n길안내가 정상적으로 실행됩니다.'}
             </div>
           </div>
         </div>
 
         {/* Bottom buttons - 항상 하단 고정 */}
         <div className="w-full space-y-3 px-6 pb-8">
-          {/* Primary button - 확인 */}
+          {/* Primary button - 확인 (딥링크) */}
           <button
             className="w-full rounded-xl px-6 py-4 transition-all"
             style={{
@@ -199,11 +197,33 @@ export function TmapHandoffScreen({
             )}
           </button>
 
+          {/* Optional: TMAP 설치하기 버튼 (OS 인식 시만 노출) */}
+          {storeUrl && (
+            <button
+              className="w-full rounded-xl px-6 py-3 transition-all"
+              style={{
+                background: 'rgba(255, 255, 255, 0.18)',
+                color: '#FFFFFF',
+                fontSize: '15px',
+                fontWeight: 600,
+                border: '1px solid rgba(255, 255, 255, 0.35)',
+                backdropFilter: 'blur(10px)',
+              }}
+              onClick={handleOpenStore}
+              disabled={isLoading}
+              aria-label="TMAP 설치하기"
+            >
+              {uaIsIOS
+                ? 'TMAP 설치하기 (App Store)'
+                : 'TMAP 설치하기 (Play 스토어)'}
+            </button>
+          )}
+
           {/* Secondary button - 돌아가기 */}
           <button
             className="w-full rounded-xl px-6 py-4 transition-all"
             style={{
-              background: 'rgba(255, 255, 255, 0.2)',
+              background: 'rgba(255, 255, 255, 0.12)',
               color: '#FFFFFF',
               fontSize: '16px',
               fontWeight: 600,
