@@ -41,6 +41,9 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* ✅ TopAppHeader 높이(56px)를 앱 전체에서 재사용 */
+  --app-header-height: 56px;
 }
 
 .dark {
@@ -128,6 +131,10 @@
 
   body {
     @apply bg-background text-foreground;
+
+    /* ✅ 화면 전체를 최소 높이로 사용 (iOS Safari 포함) */
+    min-height: 100vh;
+    min-height: 100dvh;
   }
 }
 
@@ -135,7 +142,7 @@
  * Base typography. This is not applied to elements which have an ancestor with a Tailwind text class.
  */
 @layer base {
-  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) {
+  :where(:not(:has([class*=' text-']), :not(:has([class^='text-'])))) {
     h1 {
       font-size: var(--text-2xl);
       font-weight: var(--font-weight-medium);
@@ -188,4 +195,12 @@
 
 html {
   font-size: var(--font-size);
+}
+
+/* ✅ 헤더(56px)를 제외한 나머지 화면을 꽉 채우는 앱 셸 레이아웃 */
+.app-shell {
+  /* 기본 100vh */
+  min-height: calc(100vh - var(--app-header-height));
+  /* dvh 지원 브라우저(iOS Safari 등)에서 override */
+  min-height: calc(100dvh - var(--app-header-height));
 }
