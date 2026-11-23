@@ -12,6 +12,14 @@
 - 기획서에 적은 원칙은 「공공은 판단의 근거, 민간은 실효성」. 갈 수 있는 병원은 병상과 재난문자 같은 공공데이터로 거르고, 몇 분 걸리는지는 민간 지도 API로 계산
 - 수집 지역은 서울특별시 25개 구
 
+## 화면
+
+| 지도와 추천 Top3 | 병원 마커를 눌렀을 때 | 병원 상세 | TMAP 길안내 연결 |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/images/screen-main.png" width="200" alt="지도와 추천 Top3"> | <img src="docs/images/screen-marker.png" width="200" alt="병원 마커를 눌렀을 때"> | <img src="docs/images/screen-detail.png" width="200" alt="병원 상세"> | <img src="docs/images/screen-tmap.png" width="200" alt="TMAP 길안내 연결"> |
+
+본선 발표 때 쓴 시연 영상에서 가져온 장면. 「8분 전」 옆의 SOFT는 병상 정보가 들어온 지 5분이 넘었다는 표시이고, 이런 병원은 점수를 깎음
+
 ## 주요 기능
 
 **실시간 병상 지도**
